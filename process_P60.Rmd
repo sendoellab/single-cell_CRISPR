@@ -1,0 +1,244 @@
+---
+title: 'Merge and Process P60 Samples'
+author: "Dr. Umesh Ghoshdastider"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+code_folding: hide
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(stringr)
+library(tibble)
+library(tidyr)
+library(SeuratDisk)
+library(data.table)
+library(ggplot2)
+```
+
+# do once
+```{r}
+# function to read rhapsody file fast
+read_rhapsody= function(f){
+  # fast read
+  dt=fread(f,skip=6,sep='\t')
+  # select columns
+  dt=dt[,c(1,2,5)]
+  
+  # remove cells <200 genes
+  cells = dt %>% count(Cell_Index) %>% filter(n>200)
+  dt=dt[Cell_Index %in% cells$Cell_Index,]
+  
+  # remove genes >n cells
+  genes = dt %>% count(Gene) %>% filter(n > 4)
+  # remove sgRNA grep('gRNA',genes$Gene,invert=TRUE)
+  genes = genes[!Gene %like% '_sgRNA']
+  dt=dt[Gene %in% genes$Gene,]
+  
+  # remove cells <200 genes again
+  cells = dt %>% count(Cell_Index) %>% filter(n>200)
+  dt=dt[Cell_Index %in% cells$Cell_Index,]
+  
+  # spread data
+  dt=dcast(dt, Gene ~ Cell_Index, value.var='RSEC_Adjusted_Molecules', fill=0)
+  dt= dt %>% column_to_rownames('Gene')
+  dt= CreateSeuratObject(counts=dt) #, min.features = 200
+  return(dt)
+}
+
+wta11 <- read_rhapsody('rhapsody/BD_WTA11_Expression_Data.st.gz')
+
+wta12 <- read_rhapsody('rhapsody/BD_WTA12_Expression_Data.st.gz')
+
+wta13 <- read_rhapsody('rhapsody/_1_BD_WTA13_Expression_Data.st.gz')
+
+wta14 <- read_rhapsody('rhapsody/WTA14_Expression_Data.st.gz')
+
+wta15 <- read_rhapsody('rhapsody/BD_WTA15_Expression_Data.st.gz')
+
+wta16 <- read_rhapsody('rhapsody/_1_BD_WTA16_Expression_Data.st.gz')
+
+wta17 <- read_rhapsody('rhapsody/WTA17_Expression_Data.st.gz')
+
+wta18 <- read_rhapsody('rhapsody/WTA18_Expression_Data.st.gz')
+
+```
+# merge samples
+```{r}
+# tag samples
+wta11$sample='wta11'
+wta12$sample='wta12'
+wta13$sample='wta13'
+wta14$sample='wta14'
+wta15$sample='wta15'
+wta16$sample='wta16'
+wta17$sample='wta17'
+wta18$sample='wta18'
+
+# merge
+sam = merge(wta11, y = c(wta12,wta13,wta14,wta15,wta16,wta17,wta18) )
+
+
+SaveH5Seurat(sam, 'out/wta11to18_filtered_seurat_merge_raw.h5seurat',  overwrite = TRUE )
+Convert('out/wta11to18_filtered_seurat_merge_raw.h5seurat', dest = "h5ad", overwrite = TRUE)
+
+
+```
+# check without doublet removal
+# QC 
+
+```{r}
+sam[["percent.mito"]] <- PercentageFeatureSet(sam, pattern = "^mt-",assay='RNA')
+# Visualize QC metrics as a violin plot
+Idents(sam)='sample'
+VlnPlot(sam, features = c("nFeature_RNA", "nCount_RNA", "percent.mito"), ncol = 3, pt.size = 0)
+```
+
+# read merged data
+```{r}
+sam= LoadH5Seurat('out/wta11to18_filtered_seurat_merge_raw.h5seurat')
+
+# add annotation
+an <- read.csv('scanpy_new/out/wta11to18_filtered_seurat_merge_raw_scrublet_pc40_grna_anno_q99_nodoublet.csv')
+#an <- an[c(1,2,3)]
+
+anno <- sam@meta.data %>% rownames_to_column('X') %>% left_join(an) %>% column_to_rownames('X')
+
+sam@meta.data <- anno
+
+# filter cells without doublet and with gRNA
+sam <- subset(sam, q99>0)
+
+```
+
+
+# QC 
+```{r}
+sam[["percent.mito"]] <- PercentageFeatureSet(sam, pattern = "^mt-",assay='RNA')
+# Visualize QC metrics as a violin plot
+Idents(sam)='sample'
+VlnPlot(sam, features = c("nFeature_RNA", "nCount_RNA", "percent.mito"), ncol = 3, pt.size = 0)
+```
+
+# filtering cutoff
+```{r}
+min(sam$nCount_RNA)
+quantile(sam$nCount_RNA,0.01)
+quantile(sam$nCount_RNA,0.02)
+quantile(sam$nCount_RNA,0.99) 
+
+min(sam$nFeature_RNA)
+quantile(sam$nFeature_RNA,0.01)
+quantile(sam$nFeature_RNA,0.02)
+quantile(sam$nFeature_RNA,0.99) 
+
+quantile(sam$percent.mito,0.01)
+quantile(sam$percent.mito,0.95)
+quantile(sam$percent.mito,0.99) 
+```
+
+```{r}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+plot1 <- FeatureScatter(sam, feature1 = "nCount_RNA", feature2 = "percent.mito")
+plot2 <- FeatureScatter(sam, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+# filter out low quality cells
+```{r}
+sam <- subset(sam, subset = nCount_RNA >500 & nCount_RNA< quantile(sam$nCount_RNA, 0.99) & percent.mito < 20)
+
+# Visualize QC metrics as a violin plot
+VlnPlot(sam, features = c("nFeature_RNA", "nCount_RNA", "percent.mito"), ncol = 3, pt.size = 0)
+```
+
+# process data
+```{r}
+#plan("multiprocess", workers = 1)
+# processing
+sam=NormalizeData(sam) 
+sam=FindVariableFeatures(sam, nfeatures=2000)  
+sam=ScaleData(sam)
+
+sam=RunPCA(sam)
+ElbowPlot(sam,50)
+
+```
+
+```{r}
+sam=FindNeighbors(sam, dims = 1:10)
+sam=FindClusters(sam, resolution =0.1)
+#sam=RunTSNE(sam, dims = 1:40)
+sam=RunUMAP(sam, dims = 1:10)
+
+Idents(sam)='seurat_clusters'
+DimPlot(sam, reduction = "umap", label=TRUE)
+
+```
+
+# clustering into 9 clusters
+```{r}
+library(future)
+plan("multiprocess", workers = 8)
+
+Idents(sam)='seurat_clusters'
+tmp <- subset(sam, downsample = 5000)
+
+cluster_markers=FindAllMarkers(sam, only.pos = TRUE)
+write.csv(cluster_markers,'csv/wta11to18_filtered_seurat_merge_nodoublet_grna_183K_2k_10pc_10res_markers.csv')
+
+top10 = cluster_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) 
+
+# scale all genes to be plotted later
+DoHeatmap(sam, features = top10$gene)
+ggsave('pdf/wta11to18_filtered_seurat_merge_nodoublet_grna_183K_2k_10pc_10res_heatmap.pdf',width =20, height = 20)
+
+```
+
+# cell cycle scoring
+```{r}
+sam=CellCycleScoring(sam, s.features = str_to_title(cc.genes$s.genes), g2m.features = str_to_title(cc.genes$g2m.genes) )
+
+Idents(sam)='Phase'
+DimPlot(sam, reduction = "umap")
+ggsave('pdf/wta11to18_filtered_seurat_merge_nodoublet_183K_gRNA_2k_10pc_res10_umap_cell_cycle.pdf', width = 10)
+```
+
+# plot cluster gRNA dist
+```{r}
+d=data.frame(sam$gRNA, sam$RNA_snn_res.0.1)
+e= d %>% count(sam.gRNA, sam.RNA_snn_res.0.1)
+
+#write.csv(e, 'csv/grna_counts_by_cluster.csv')
+ggplot(e, aes(x=sam.gRNA, y=n, fill=sam.RNA_snn_res.0.1 ) ) + geom_bar(stat='identity', position="fill")+ coord_flip() #+ theme(legend.position = "none") 
+ggsave('pdf/wta11to18_filtered_seurat_merge_nodoublet_grna_183K_2k_10pc_10res_grna_dist.pdf', height = 30)
+#ggplot(e, aes(x=sam.RNA_snn_res.0.2, y=n, fill=factor(sam.grna) ) ) + geom_bar(stat='identity') 
+
+```
+
+# plot marker genes
+```{r}
+genes0=unique(sort(unlist(strsplit('Krt5, Krt14, Cd34, Krt1, Krt10, Krt17, samtn, Scd1, Flg, Cd3e, Cd74, Sox9, Krt6a, Ly6a, H19, Mki67, Top2a, Dct, Tyrp1, Fst, Lhx2, Krt79, Phlda1, Dusp6, Runx1, Krt75, Fgf18, S100a6, S100a10, Timp3, Lima1, Krt24, Lgr5, Lgr6, Gli1, Krt15, Tnf, Tnfrsf1a, Tnfrsf1b, Mmp10, Pthlh, Fez1, Il24, Kcnma1, Inhba, Magea4, Nt5E, Lamc2, Slitrk6, Cd14, Myd88, Csf3, Csf3r',', '))))
+
+genes=sort(intersect( rownames(sam), genes0))
+
+#FeaturePlot(tu, genes)
+#ggsave('pdf/p60_marker_genes_umap.pdf', width = 20, height = 25)
+
+plot_density(sam, features = genes) + theme_void() # + NoAxes()
+ggsave('pdf/p60_markers_kde.png', width = 40, height = 30)
+
+Idents(sam)='seurat_clusters'
+VlnPlot(sam, features = genes, pt.size = 0.01)
+ggsave('pdf/p60_markers_violin.png', width = 30, height = 30)
+
+DotPlot(sam, features = genes) + RotatedAxis()
+ggsave('pdf/p60_marker_genes_dotplot.pdf', width = 15, height = 5)
+
+```
