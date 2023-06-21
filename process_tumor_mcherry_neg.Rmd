@@ -1,0 +1,199 @@
+---
+title: 'Tumor mCherry Negative Samples'
+author: "Dr. Umesh Ghoshdastider"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+code_folding: hide
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(stringr)
+library(tibble)
+library(tidyr)
+library(SeuratDisk)
+library(data.table)
+library(ggplot2)
+```
+
+```{r}
+# function to parse rhapsody output file quickly
+read_rhapsody= function(f){
+  # fast read
+  dt=fread(f,skip=6,sep='\t')
+  # select columns
+  dt=dt[,c(1,2,5)]
+  
+  # remove cells with low Bioproducts or genes
+  cells = dt %>% count(Cell_Index) %>% filter(n>400)
+  dt=dt[Cell_Index %in% cells$Cell_Index,]
+  
+  # remove Bioproducts min 50 cells
+  Bioproducts = dt %>% count(Bioproduct) %>% filter(n>49)
+  # remove sgRNA grep('gRNA',genes$Gene,invert=TRUE)
+  Bioproducts = Bioproducts[!Bioproduct %like% '_sgRNA']
+  dt=dt[Bioproduct %in% Bioproducts$Bioproduct,]
+  
+  # spread data
+  dt=dcast(dt, Bioproduct ~ Cell_Index, value.var='RSEC_Adjusted_Molecules', fill=0)
+  dt= dt %>% column_to_rownames('Bioproduct')
+  dt= CreateSeuratObject(counts=dt, min.features = 400)
+  return(dt)
+}
+
+# bumpy13_14 mcherry neg
+neg  <- read_rhapsody('/mnt/ngs/umesh/scrna-seq/peter/tumor/rhapsody/bumpy13_14_mcherry_neg_Expression_Data.st.gz')
+
+# save raw data to process by scrublet
+SaveH5Seurat(neg, 'out/bumpy13-14_mcherry_neg_raw.h5seurat',  overwrite = TRUE )
+Convert('out/bumpy13-14_mcherry_neg_raw.h5seurat', dest = "h5ad", overwrite = TRUE)
+```
+
+# remove doublet using scrublet
+```{python}
+import scanpy as sc
+
+a=sc.read_h5ad('../seurat_new/out/bumpy13-14_mcherry_neg_raw.h5ad')
+sc.external.pp.scrublet(a, expected_doublet_rate=0.2, n_prin_comps=40)
+sc.external.pl.scrublet_score_distribution(a, save='_bumpy13_14_mcherry_neg_pc40.pdf')
+
+b[['doublet_score','predicted_doublet']].to_csv('out/bumpy13_14_mcherry_neg_pc40_doublet.csv')
+
+```
+
+
+```{r}
+#neg= LoadH5Seurat('out/bumpy13-14_mcherry_neg_raw.h5seurat')
+
+# add annotation
+an <- read.csv('out/bumpy13_14_mcherry_neg_pc40_doublet.csv')
+an$X=as.character(an$X)
+
+anno <- neg@meta.data %>% rownames_to_column('X') %>% left_join(an) %>% column_to_rownames('X')
+
+neg@meta.data <- anno
+
+# select cells without doublet 
+neg <- subset(neg, predicted_doublet == 'False')
+
+```
+
+# QC plot
+```{r}
+neg[["percent.mito"]] <- PercentageFeatureSet(neg, pattern = "^mt.",assay='RNA')
+# Visualize QC metrics as a violin plot
+VlnPlot(neg, features = c("nFeature_RNA", "nCount_RNA", "percent.mito"), ncol = 3, pt.size = 0)
+```
+
+# filtering cutoff
+```{r}
+quantile(neg$nCount_RNA,0.01)
+quantile(neg$nCount_RNA,0.99) 
+
+quantile(neg$nFeature_RNA,0.01)
+quantile(neg$nFeature_RNA,0.99) 
+
+quantile(neg$percent.mito,0.01)
+quantile(neg$percent.mito,0.99) 
+```
+
+# filter out low quality cells
+```{r}
+neg <- subset(neg, subset = nCount_RNA >500 & nCount_RNA< 10000 & percent.mito < 20)
+
+# Visualize QC metrics as a violin plot
+VlnPlot(neg, features = c("nFeature_RNA", "nCount_RNA", "percent.mito"), ncol = 3, pt.size = 0)
+```
+
+# process data
+```{r}
+#plan("multiprocess", workers = 1)
+# processing
+neg=NormalizeData(neg) 
+neg=FindVariableFeatures(neg)
+neg=ScaleData(neg)
+
+neg=RunPCA(neg)
+ElbowPlot(neg,50)
+```
+
+# Clustering and UMAPs
+```{r}
+neg=FindNeighbors(neg, dims = 1:30)
+neg=FindClusters(neg, resolution =0.2)
+#neg=RunTSNE(neg, dims = 1:40)
+neg=RunUMAP(neg, dims = 1:30)
+DimPlot(neg, reduction = "umap", label = TRUE)
+ggsave('pdf/bumpy13_14_neg_pc30_res20_umap.pdf')
+SaveH5Seurat(neg, 'out/bumpy13_14_mcherry_neg_pc30_res20_processed.h5seurat',  overwrite = TRUE )
+```
+
+
+
+# find cluster markers 
+```{r fig.height=10}
+library(ggplot2)
+Idents(neg)='seurat_clusters'
+
+library(future)
+plan("multiprocess", workers = 8)
+cluster_markers=FindAllMarkers(neg, only.pos = TRUE) #
+plan("multiprocess", workers = 1)
+write.csv(cluster_markers,'csv/bumpy13_14_neg_markers.csv')
+
+top10 = cluster_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) 
+
+# scale all genes to be plotted later ScaleData(tu, features = rownames(tu))
+DoHeatmap(neg, features = top10$gene)
+ggsave('pdf/bumpy13_14_neg_markers_heatmap.pdf',height=30, width = 30)
+```
+
+
+# Nebulosa plots of selected genes
+```{r}
+library(Nebulosa)
+genes0=unlist(strsplit('Mmp10, Pthlh, Fez1, Il24, Kcnma1, Inhba, Magea4, Nt5E, Lamc2, Slitrk6, Vim, TgfbI and Itga5',', '))
+
+genes=intersect( rownames(neg), genes0)
+
+#FeaturePlot(tu, genes)
+#ggsave('pdf/old_marker_genes_umap.pdf', width = 20, height = 25)
+
+
+plot_density(neg, features = genes) + theme_void() # + NoAxes()
+ggsave('pdf/bumpy13_14_neg_TSK_markers_kde.png', width = 30, height = 20)
+
+Idents(neg)='seurat_clusters'
+VlnPlot(neg, features = genes, pt.size = 0.01)
+ggsave('pdf/bumpy13-14_neg_TSK_markers_violin.png', width = 30, height = 20)
+
+DotPlot(neg, features = genes) + RotatedAxis()
+ggsave('pdf/bumpy13-14_neg_TSK_marker_genes_dotplot.pdf', width = 10, height = 5)
+
+```
+
+# plot marker genes
+```{r}
+genes0=unique(sort(unlist(strsplit('Krt5, Krt14, Cd34, Krt1, Krt10, Krt17, negtn, Scd1, Flg, Cd3e, Cd74, Sox9, Krt6a, Ly6a, H19, Mki67, Top2a, Dct, Tyrp1, Fst, Lhx2, Krt79, Phlda1, Dusp6, Runx1, Krt75, Fgf18, S100a6, S100a10, Timp3, Lima1, Krt24, Lgr5, Lgr6, Gli1, Krt15, Tnf, Tnfrsf1a, Tnfrsf1b, Mmp10, Pthlh, Fez1, Il24, Kcnma1, Inhba, Magea4, Nt5E, Lamc2, Slitrk6, Cd14, Myd88, Csf3, Csf3r',', '))))
+
+genes=sort(intersect( rownames(neg), genes0))
+
+#FeaturePlot(tu, genes)
+#ggsave('pdf/old_marker_genes_umap.pdf', width = 20, height = 25)
+
+plot_density(neg, features = genes) + theme_void() # + NoAxes()
+ggsave('pdf/bumpy13_14_neg_markers_kde.png', width = 40, height = 30)
+
+Idents(neg)='seurat_clusters'
+VlnPlot(neg, features = genes, pt.size = 0.01)
+ggsave('pdf/bumpy13-14_neg_markers_violin.png', width = 30, height = 30)
+
+DotPlot(neg, features = genes) + RotatedAxis()
+ggsave('pdf/bumpy13-14_neg_marker_genes_dotplot.pdf', width = 15, height = 5)
+
+```
