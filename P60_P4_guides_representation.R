@@ -1,0 +1,439 @@
+# author: Simona Baghai Sain
+
+### Rproject: skin_sc_CRISPR
+library(Seurat)
+library(SeuratDisk)
+library(dplyr)
+library(tibble)
+library(tidyverse)
+library(stringr)
+library(Hmisc)
+library(corrplot)
+library(ggplot2)
+library(patchwork)
+library(cowplot)
+library(scales)
+library(writexl)
+
+###
+# list of targeted genes that are characterized by copy number variation in HNSCC:
+CNV <- c("P3h2", "Oraov1", "Shank2", "Cdkn2b","Ano1", "Fgf3", "Ppfia1", "Tpcn2", "Cttn", "Sox2", "Fgf4", "Zmat3", "Trp63", "Ccnd1", "Fgf15", "Fadd")
+
+#### Import data ####
+#Import dictionary to map guide sequences to their guide_ID label (available in the '500 sgRNAs' sheet of our manuscript's Supplementary Information Tables),
+#guide_dict <- read.table("500_guides.tsv", header = T) %>% # rename header:
+#              setNames(., c("guide_ID", "sgRNA"))  ## "sgRNA" is the 20nt sequence
+
+# Alternatively, convert the 'data/sgRNA_20nt.fa' in this repository from FASTA to a two-column table:
+#fa <- read_lines("data/sgRNA_20nt_repo.fa")
+guide_dict <- data.frame(guide_ID = fa[seq(1,by=2, len=500)] %>% stringr::str_remove(., pattern = "^>"),
+                         sgRNA = fa[seq(2,by=2, len=500)])
+
+# Import PCR counts for pre-injection libraries (T0):
+# CSV files exported from the individual 'T0_library_A_counts', 'T0_library_B_counts' and 'T0_library_C_counts' sheets of our manuscript's Supplementary Information Tables.
+## Library A (file comprises counts for 4 PCR replicates, columns S1-S4)
+libA_counts <- read.csv("T0_library_A_counts.csv", h=T) #%>% setNames(., nm=c("sgRNA", paste0("S", c(1:4))))
+
+# library B and C input are structured differently, as they have only one column for counts (no replicates)
+## Library B
+libB_counts <- read.csv("T0_library_B_counts.csv", h=T) #%>% setNames(., nm=c("sgRNA", "counts"))
+## Library C
+libC_counts <- read.csv("T0_library_C_counts.csv", h=T) #%>% setNames(., nm=c("sgRNA", "counts"))
+
+# Import Seurat objects for Px (P4 or P60) samples:
+# P4
+p4 <- SeuratDisk::LoadH5Seurat("wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_grna_processed.h5seurat")
+
+# P60
+p60 <- SeuratDisk::LoadH5Seurat("wta11to18_filtered_seurat_merge_nodoublet_grna_183K_2k_10pc_10res_grna_processed.h5seurat")
+
+# In Seurat v5 beta, the LoadH5Seurat might fail. Loading it in Seurat v4 and saving it to an RData file helps circumnavigate the issue:
+#load("wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_grna_processed.RData") # Seurat object "p4"
+#load("wta11to18_filtered_seurat_merge_nodoublet_grna_183K_2k_10pc_10res_grna_processed.RData") # Seurat object: "p60"
+
+#### Restructure data ####
+# Note: for the EpSC-subset calculations (Epidermal SC= Basal stem cells), decomment below to filter for cluster 0 only.
+
+## P4 data
+df.p4 <- p4@meta.data %>% #dplyr::filter(RNA_snn_res.0.15 == 0) %>%
+  dplyr::select(sgRNA, sample) %>% 
+  table %>% as.data.frame %>%
+  dplyr::mutate(sgRNA = as.character(sgRNA), 
+                sample= as.character(sample)) %>% 
+  dplyr::rename(nCells = Freq, guide_ID = sgRNA)
+
+
+### P60 data
+df.p60 <- p60@meta.data %>% #dplyr::filter(RNA_snn_res.0.1 == 0) %>%
+  dplyr::select(sgRNA, sample) %>% 
+  table %>% as.data.frame %>%
+  dplyr::mutate(sgRNA = as.character(sgRNA), 
+                sample= as.character(sample)) %>% 
+  dplyr::rename(nCells = Freq, guide_ID = sgRNA)
+
+
+# Add matching pre-injection library (T0) labels to each sample:
+df.p4 <- df.p4 %>% dplyr::mutate(lib = case_match(sample,
+                                                    paste0("wta", 4:6) ~ "A",
+                                                    paste0("wta", 7:10) ~ "B"))
+
+df.p60 <- df.p60 %>% dplyr::mutate(lib = case_match(sample,
+                                                    paste0("wta", 11:12) ~ "B",
+                                                    paste0("wta", 13:18) ~ "C"))
+
+### Pre-injection libraries (T0)
+
+# Define 'gene_symbol' for control guides as 'ctrl', then add library label
+libA_guides <- full_join(guide_dict, libA_counts, by="sgRNA") %>% 
+  mutate(gene_symbol = stringr::str_remove(guide_ID, pattern = "_sgRNA.*")) %>%
+  # define column 'counts' for library A as the averaged counts of the 4 PCR replicates
+  dplyr::mutate(counts = (S1+S2+S3+S4)/4) %>%
+  dplyr::select(guide_ID, sgRNA, counts, gene_symbol) %>%
+  dplyr::mutate(lib = "A") 
+  
+libB_guides <- dplyr::full_join(guide_dict, libB_counts, by="sgRNA") %>% 
+  dplyr::mutate(gene_symbol = stringr::str_remove(guide_ID, pattern = "_sgRNA.*")) %>%
+  dplyr::mutate(lib = "B") 
+
+libC_guides <- dplyr::full_join(guide_dict, libC_counts, by="sgRNA") %>% 
+  dplyr::mutate(gene_symbol = stringr::str_remove(guide_ID, pattern = "_sgRNA.*")) %>%
+  dplyr::mutate(lib = "C")
+
+# Create a single dataframe with all three T0 libraries, and
+# normalize each guide as fraction of the total
+libABC_counts <- rbind(libA_guides, libB_guides, libC_guides) %>%
+  dplyr::select(lib, guide_ID, gene_symbol, counts) %>%
+  dplyr::group_by(lib) %>% dplyr::mutate(lib_tot_counts = sum(counts)) %>% dplyr::ungroup(.) %>% 
+  dplyr::mutate(preinj_counts_fraction = counts / lib_tot_counts)
+
+# Create a new column, 'gene_symbol_tri', similar to the gene_symbol one but
+# with names for pseudo-triplets of control guides: from control sgRNA 1 to 3 = ctrl_1, from 4 to 6 = ctrl_2 etc.
+# paste0("ctrl_", as.numeric(gl(17, 3))[-51]) # remove last (51st) element, as ctrl_17 is only for ctrl_sgRNA.49 and ctrl_sgRNA.50
+ctrl_guideID_pseudo_triplets = paste0("ctrl_sgRNA.",c(1:50))
+names(ctrl_guideID_pseudo_triplets) <- paste0("ctrl_", as.numeric(gl(17, 3))[-51])
+
+libABC_counts$gene_symbol_tri <- libABC_counts$gene_symbol
+libABC_counts$gene_symbol_tri[which(libABC_counts$guide_ID %in% ctrl_guideID_pseudo_triplets)] <- names(ctrl_guideID_pseudo_triplets)
+
+##### Guides representation - normalization and FC ####
+# Note: For Px (P4 and P60) samples we use the cell counts for the individual guides; for T0 libraries we use the PCR counts.
+# Steps:
+# 1. Counts for each guide at P60, P4 and T0 are first transformed to proportions (over their total).
+# 2. In each Px sample, each guide is normalized against its T0 proportion (to account for its initial representation in the pre-injection library)
+# --> this gives us a FC (Fold Change of ratios), which describes if the fraction of a guide over the total of guides went up or down.
+# 3. Then, each triplet of guides targeting the gene are averaged together (by arithmetic mean),
+# and so are control guides, using the pseudo-triplets defined above in 'gene_symbol_tri'.
+# 4. This gets averaged across samples using a weighted mean, where the weight is the overall number of cells for each sample.
+
+# Function to average by triplet (one value for each target gene), in each sample [steps 1-3 described above]:
+fold_change_by_sample <- function(Px_dataframe, T0_library_info){
+  
+  df.px_FC.by_sample <- dplyr::left_join(Px_dataframe, T0_library_info, by=c("lib", "guide_ID")) %>%
+  # Normalize each guide as fraction over the total nCells in each Px sample
+  dplyr::group_by(sample) %>%
+  dplyr::mutate(nCells_sample_tot = sum(nCells)) %>% dplyr::ungroup(.) %>%
+  dplyr::mutate(sgRNA_nCells_fraction = nCells/nCells_sample_tot) %>% 
+  # normalize each sgRNA_nCells_fraction (in each sample) for its T0 pre-injection fraction --> obtain FC of Px/T0
+  dplyr::mutate(sgRNA_FC = sgRNA_nCells_fraction / preinj_counts_fraction) %>%
+  # average across guide triplets (or ctrl-pseudo-triplets), in each sample:
+  dplyr::group_by(sample, gene_symbol_tri, gene_symbol, nCells_sample_tot) %>%
+  dplyr::summarise(gene_symbol_tri.avg_FC = mean(sgRNA_FC)) %>%
+  # add rank within each sample, from highest to lowest FC
+  dplyr::group_by(sample) %>%
+  dplyr::mutate(rank_tie_min_by_sample =  dplyr::min_rank(- gene_symbol_tri.avg_FC)) %>%
+  dplyr::ungroup(.) %>% # Note: guide_ID-level info is dropped
+  # take log2
+  dplyr::mutate(log2_gene_symbol_tri.avg_FC = log2(gene_symbol_tri.avg_FC)) %>%
+  dplyr::mutate(sample = toupper(sample)) %>% # to have sample names in uppercase in the plot
+  dplyr::mutate(guide_type = case_match(gene_symbol, 
+                                        "ctrl" ~ "Control",
+                                        CNV ~ "CNV",
+                                        .default = "Mutated_in_SCC")) %>% # changed to "Gene mutated in HNSCC/SCC" in final plot legend
+    dplyr::ungroup(.)
+
+  return(df.px_FC.by_sample)
+}
+
+# Function to average across same-timepoint samples (i.e. biological replicates), with weighted mean (weights = total number of cells in each sample) [step 4 described above]:
+weighted_avg_fold_change <- function(df.px_FC.by_sample){
+  df.px_FC.avg <- df.px_FC.by_sample %>%
+  dplyr::group_by(gene_symbol_tri, gene_symbol, guide_type) %>% # gene_symbol and guide_type: included just not to be dropped 
+  dplyr::summarise(gene_symbol_tri.avg_FC.wmean_rep = stats::weighted.mean(gene_symbol_tri.avg_FC, w = nCells_sample_tot),
+                   gene_symbol_tri.avg_FC.avg_rep = base:::mean(gene_symbol_tri.avg_FC)) %>%
+  dplyr::mutate(log2_gene_symbol_tri.avg_FC.wmean_rep = base::log2(gene_symbol_tri.avg_FC.wmean_rep)) %>%
+  dplyr::ungroup(.)
+  return(df.px_FC.avg)
+}
+
+# Use defined functions to obtain FC values for P4 and P60, within and across samples:
+df.p4_FC.by_sample <- fold_change_by_sample(df.p4, libABC_counts)
+df.p60_FC.by_sample <- fold_change_by_sample(df.p60, libABC_counts)
+
+df.p4_FC.avg  <- weighted_avg_fold_change(df.p4_FC.by_sample)
+df.p60_FC.avg <- weighted_avg_fold_change(df.p60_FC.by_sample)
+
+#### Compute P60 vs P4 ####
+
+df.P60vsP4.avg <- dplyr::inner_join(df.p60_FC.avg %>% dplyr::mutate(timepoint = "P60"),
+                                    df.p4_FC.avg %>% dplyr::mutate(timepoint = "P4"),
+                                    by = c("gene_symbol_tri", "gene_symbol", "guide_type"),
+                                    suffix = c(".P60", ".P4")) %>% 
+  dplyr::mutate(P60vsP4.FC = gene_symbol_tri.avg_FC.wmean_rep.P60 / gene_symbol_tri.avg_FC.wmean_rep.P4) %>% 
+  dplyr::mutate(log2_P60vsP4.FC = log2(P60vsP4.FC))
+
+####
+
+#### Waterfall Plots ####
+
+# For plotting, rearrange guides by descending fold changes (averaged by triplets and across Px timepoint replicates)
+
+p4.order_by_avg <- df.p4_FC.avg %>%
+  dplyr::arrange(desc(gene_symbol_tri.avg_FC.wmean_rep)) %>% dplyr::select(gene_symbol_tri, gene_symbol_tri.avg_FC.wmean_rep) %>% 
+  dplyr::mutate(rank_by_total_avg = row_number())
+# here (for P4 final averaged values), ranking by fold change (using 'arrange(desc(gene_symbol_tri.avg_FC.wmean_rep)) and 'row_number') or by 'min_rank' gives the same result:
+#dplyr::mutate(rank_by_total_avg=row_number(), rank_tie_min =  min_rank(- gene_symbol_tri.avg_FC.wmean_rep)) %>% mutate(comp = (rank_by_total_avg==rank_tie_min))
+
+p60.order_by_avg <- df.p60_FC.avg %>%
+  dplyr::arrange(desc(gene_symbol_tri.avg_FC.wmean_rep)) %>% dplyr::select(gene_symbol_tri, gene_symbol_tri.avg_FC.wmean_rep) %>% 
+  dplyr::mutate(rank_by_total_avg = row_number())
+# here (for P60 final averaged values), ranking by fold change (using 'arrange(desc(gene_symbol_tri.avg_FC.wmean_rep)) and 'row_number') or by 'min_rank' gives the same result:
+# dplyr::mutate(rank_by_total_avg=row_number(), rank_tie_min =  min_rank(- gene_symbol_tri.avg_FC.wmean_rep)) %>% mutate(comp = (rank_by_total_avg==rank_tie_min))
+
+
+# Create a dataframe with only the info needed for the plots
+df_plot.p4_FC.by_sample <- dplyr::left_join(by="gene_symbol_tri",
+                                             df.p4_FC.by_sample[,c("sample",
+                                                                    "gene_symbol",
+                                                                    "gene_symbol_tri",
+                                                                    "gene_symbol_tri.avg_FC",
+                                                                    "rank_tie_min_by_sample",
+                                                                    "log2_gene_symbol_tri.avg_FC",
+                                                                    "guide_type")],
+                                             p4.order_by_avg[,c("gene_symbol_tri", "gene_symbol_tri.avg_FC.wmean_rep", "rank_by_total_avg")]) %>%
+  dplyr::group_by(gene_symbol_tri) %>% 
+  # add standard dev across samples
+  dplyr::mutate(sd.avg_FC = stats::sd(gene_symbol_tri.avg_FC)) %>% dplyr::ungroup(.)
+
+
+df_plot.p60_FC.by_sample <- dplyr::left_join(by="gene_symbol_tri",
+                                        df.p60_FC.by_sample[,c("sample",
+                                                               "gene_symbol",
+                                                               "gene_symbol_tri",
+                                                               "gene_symbol_tri.avg_FC",
+                                                               "rank_tie_min_by_sample",
+                                                               "log2_gene_symbol_tri.avg_FC",
+                                                               "guide_type")],
+                                        p60.order_by_avg[,c("gene_symbol_tri", "gene_symbol_tri.avg_FC.wmean_rep", "rank_by_total_avg")]) %>%
+  dplyr::group_by(gene_symbol_tri) %>%
+  # add standard dev
+  dplyr::mutate(sd.avg_FC = stats::sd(gene_symbol_tri.avg_FC)) %>% dplyr::ungroup(.)
+
+
+#### Extended Data Figure 1i ####
+# For P60, use geom_bar to plot the averages, and add with geom_point the values representing each sample
+
+# P4 vs T0 ## not used for manuscript figures
+ggplot(df_plot.p4_FC.by_sample,
+       aes(x = reorder(gene_symbol_tri, rank_by_total_avg))) +
+  geom_bar(mapping = aes(y = gene_symbol_tri.avg_FC.wmean_rep, # using this column on purpose so the mean is this value*7/7
+                         fill = guide_type),
+           # border:
+           colour = "black", linewidth = 0.3, #alpha=0.5,
+           stat = 'summary', fun= 'mean') +
+  geom_point(mapping = aes(y=gene_symbol_tri.avg_FC, shape=sample, color=sample), # use the values from the individual samples
+             stroke = 0.8 # for thicker pch symbols
+  ) +
+  theme_cowplot() + 
+  scale_fill_manual(values = c("grey","white", "grey50")) +
+  scale_shape_manual(values = c(4,8,15,1,2,6,21)) + # define which shape to use for pch points
+  scale_color_manual(values = RColorBrewer::brewer.pal(name = "Paired", 7)) +
+  xlab("Perturbations") + ylab("log2 Fold Change P4/T0 library") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust=1)) + 
+  scale_y_continuous(trans='log2', 
+                     #breaks = scales::pretty_breaks(n = 11, logsc=TRUE),
+                     #breaks = scales::trans_breaks("log2", function(x) 2^x),
+                     labels = scales::trans_format("log2", format = integer())
+  ) + # breaks = scales::pretty_breaks(n = 11, logsc=TRUE))  +
+  background_grid(major = "x", color.major = "lightgrey")
+
+
+# P60 vs T0 # Plot used for EDF1i
+waterfall_p60_reps <- ggplot(df_plot.p60_FC.by_sample,
+                             aes(x = reorder(gene_symbol_tri, rank_by_total_avg))) +
+  geom_bar(
+    mapping = aes(y = gene_symbol_tri.avg_FC.wmean_rep, # using this column on purpose so the mean is this value*8/8
+                  fill = guide_type),
+    # border:
+    colour = "black",
+    linewidth = 0.3,
+    #alpha=0.5,
+    #position = position_dodge(width=.5),
+    stat = 'summary',
+    fun = 'mean'
+  ) +
+  geom_point(
+    mapping = aes(y = gene_symbol_tri.avg_FC, shape = sample, color = sample),
+    # use the values from the individual samples
+    stroke = 0.8 # for thicker pch symbols
+  ) +
+  theme_cowplot() +
+  scale_fill_manual(values = c("grey", "white", "grey50")) +
+  scale_shape_manual(values = c(4, 8, 15, 1, 2, 6, 21, 22)) + # define which shape to use for pch points
+  scale_color_manual(values = RColorBrewer::brewer.pal(name = "Paired", 8)) +
+  xlab("Perturbations") + ylab("log2 Fold Change P60/T0 library") +
+  theme(axis.text.x = element_text(
+    angle = 90,
+    vjust = 1,
+    hjust = 1
+  )) +
+  scale_y_continuous(trans = 'log2',
+                     labels = scales::trans_format("log2", format = integer())) +
+  # breaks = scales::pretty_breaks(n = 11, logsc=TRUE))  +
+  background_grid(major = "x", color.major = "lightgrey")
+
+ggsave(
+  waterfall_p60_reps,
+  file = "p60vsT0_log2FC_barplot_with_points.eps",
+  device = "eps",
+  width = 7500,
+  height = 2100,
+  units = "px",
+  limitsize = FALSE
+)
+
+##### Correlation across P60 samples of top enriched/depleted guides ####
+
+# extract top and bottom 20 targeting guides (averaged for triplets)
+# sorted from highest
+avg_top_20 <- df.p60_FC.avg %>% filter(!str_detect(gene_symbol_tri, "ctrl_")) %>%
+  dplyr::slice_max(gene_symbol_tri.avg_FC.wmean_rep, n = 20) %>% select(gene_symbol_tri) %>% unlist
+
+# sorted from lowest
+avg_bottom_20 <- df.p60_FC.avg %>% filter(!str_detect(gene_symbol_tri, "ctrl_")) %>%
+  dplyr::slice_min(gene_symbol_tri.avg_FC.wmean_rep, n = 20) %>% select(gene_symbol_tri) %>% unlist
+
+# Reshape results into matrix to use for pairwise correlation of samples:
+mat.p60_ranks.by_sample <- df.p60_FC.by_sample %>% select(sample, gene_symbol_tri, rank_tie_min_by_sample) %>%
+  tidyr::pivot_wider(names_from = sample, values_from = rank_tie_min_by_sample) %>% 
+  column_to_rownames(var = "gene_symbol_tri") %>% as.matrix
+
+##### Function: adjust_pval_matrix ####
+# Get a matrix of FDR adjust p-values from the correlation nominal p-values
+# modified from Gordon Smyth's https://support.bioconductor.org/p/63198/#63204
+
+adjust_pval_matrix <- function(M){
+  sample.pair <- paste(colnames(M)[row(M)], colnames(M)[col(M)], sep=".")
+  i <- lower.tri(M)
+  Dat <- data.frame(sample_pair = sample.pair[i], p.value=M[i])
+  Dat$FDR <- p.adjust(Dat$p.value, method="BH")
+  # split pairs into 2 new columns, double to fill the missing pairs (reversed, with rename), and pivot_wider to matrix
+  Dat <- Dat %>% tidyr::separate(col = sample_pair, sep = "\\.", into=c("sample1", "sample2"))
+  bimat <- rbind(
+    Dat %>% select(sample1, sample2, FDR),
+    Dat %>% select(sample1, sample2, FDR) %>% rename(sample2="sample1", sample1="sample2")
+  ) %>% tidyr::spread(., key = sample2, value = FDR) %>% column_to_rownames(var="sample1") %>% as.matrix
+  return(bimat)
+}
+
+# mini-function to compute correlation (either Pearson's or Spearman's) and adjust the pvalues obtained, all in one:
+corr_and_padj <- function(M, type = c("pearson", "spearman")){
+  res <- Hmisc::rcorr(M, type = type)
+  res$FDR <- adjust_pval_matrix(res$P)
+  return(res)
+}
+
+# The Spearman correlation between two variables is equal to the Pearson correlation between the rank values of those two variables:
+# mat.p60_FC.by_sample <- df.p60_FC.by_sample %>% select(sample, gene_symbol_tri, gene_symbol_tri.avg_FC) %>%
+#  tidyr::pivot_wider(names_from = sample, values_from = rank_tie_min_by_sample) %>% 
+#  column_to_rownames(var = "gene_symbol_tri") %>% as.matrix
+#corr_spearman_p60FC.res <- corr_and_padj(mat.p60_FC.by_sample, type = "spearman")
+
+# substantially same results as:
+#corr_p_on_ranks_p60.res <- corr_and_padj(mat.p60_ranks.by_sample, type = "pearson")
+# Ties might be handled differently, so we prefer the latter as it uses the ranks as defined above with 'min_rank'.
+
+# So to get the Spearman correlation among pairs of P60 biological replicates of the overall top&bottom 20 guides,
+# we use Pearson's method on the _rankings_ obtained on all guides in each sample.
+corr_p_on_ranks_p60_20tb.res <- corr_and_padj(mat.p60_ranks.by_sample[c(avg_top_20, avg_bottom_20),], type = "pearson")
+
+### corrplots ####
+corr_res <- corr_p_on_ranks_p60_20tb.res
+# FDR-adjusted p-values: substitute NAs (in diagonals) with 0s, to plot p-values without errors
+corr_res$FDR[which(is.na(corr_res$FDR))] <- 0
+corrplot::corrplot.mixed(corr_res$r, lower="number", upper="color", 
+                          lower.col= corrplot::COL2("BrBG", 100),
+                          upper.col= corrplot::COL2("BrBG", 100),
+                          #number.cex=0.9, tl.cex=0.7,
+                          tl.srt = 45, tl.col = 'black',
+                          p.mat = corr_res$FDR, sig.level = 0.05, 
+                          insig = 'pch', pch="X",
+                          pch.cex = 0.9)
+                          #insig = 'label_sig', pch.col = 'black')
+  
+p <- recordPlot()
+ggp <- cowplot::ggdraw(p) + 
+  theme(plot.title = element_text(size = 14),
+        plot.subtitle = element_text(size = 12),
+        plot.margin = grid::unit(c(0,0,0,0), "cm"))
+  #, axis.line = element_line(colour = "black"),
+  # panel.border = element_rect(colour = "black", fill=NA, size=5))
+ 
+# Plot used for Extended Data Figure 1h
+ggsave(
+  ggp,
+  file = "p60vsT0_corrplot_top20_bottom20_spearman_FDR.eps",
+  device = "eps",
+  width = 150,
+  height = 150,
+  units = "mm",
+  limitsize = FALSE
+)
+
+
+#### For manuscript's Extended Data Table 1 ####
+# rename columns:
+p60.by_sample <- df.p60_FC.by_sample %>% dplyr::rename(Guide_Target = gene_symbol_tri, 
+                                                             sample_tot_nCells = nCells_sample_tot,
+                                                             mean_FoldChange = gene_symbol_tri.avg_FC,
+                                                             rank_in_sample = rank_tie_min_by_sample) %>%
+  dplyr::select(sample, Guide_Target, sample_tot_nCells, mean_FoldChange, rank_in_sample)
+
+p4.by_sample <- df.p4_FC.by_sample %>% dplyr::rename(Guide_Target = gene_symbol_tri, 
+                                                       sample_tot_nCells = nCells_sample_tot,
+                                                       mean_FoldChange = gene_symbol_tri.avg_FC,
+                                                       rank_in_sample = rank_tie_min_by_sample) %>%
+  dplyr::select(sample, Guide_Target, sample_tot_nCells, mean_FoldChange, rank_in_sample)
+
+
+p60.wm <- df.p60_FC.avg %>% dplyr::rename(Guide_Target = gene_symbol_tri, 
+                                          Target_Type = guide_type,
+                                          weighted_mean_FoldChange = gene_symbol_tri.avg_FC.wmean_rep) %>%
+  dplyr::select(Guide_Target, Target_Type, weighted_mean_FoldChange)
+
+p4.wm <- df.p4_FC.avg %>% dplyr::rename(Guide_Target = gene_symbol_tri, 
+                                          Target_Type = guide_type,
+                                          weighted_mean_FoldChange = gene_symbol_tri.avg_FC.wmean_rep) %>%
+  dplyr::select(Guide_Target, Target_Type, weighted_mean_FoldChange)
+
+p60vsp4 <- df.P60vsP4.avg %>% dplyr::rename(Guide_Target = gene_symbol_tri,
+                                               Target_Type = guide_type,
+                                               weighted_mean_FoldChange.P60 = gene_symbol_tri.avg_FC.wmean_rep.P60,
+                                               weighted_mean_FoldChange.P4 = gene_symbol_tri.avg_FC.wmean_rep.P4,
+                                            P60vsP4.FoldChange = P60vsP4.FC) %>%
+  dplyr::select(Guide_Target, Target_Type, weighted_mean_FoldChange.P60, weighted_mean_FoldChange.P4, P60vsP4.FoldChange)
+
+write_xlsx(
+  list(
+    P60_results_by_sample = p60.by_sample,
+    P60_results_averaged = p60.wm,
+    P4_results_by_sample = p4.by_sample,
+    P4_results_averaged = p4.wm,
+    P60_vs_P4 = p60vsp4
+  ),
+  path = "P60_P4_ranks_FoldChange_Extended_Data_Table.xlsx"
+  # or, for the EpSC subset:
+  #path = "EpSC_subset.P60_P4_ranks_FoldChange_Extended_Data_Table.xlsx"
+)
+# Tables were then merged in one
+
+
