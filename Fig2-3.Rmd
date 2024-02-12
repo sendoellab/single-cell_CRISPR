@@ -1,0 +1,391 @@
+---
+title: "Codes for reproducing the figures 2 and 3"
+author: "Dr. Umesh Ghoshdastider"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+---
+
+# import libraries
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(forcats)
+library(tibble)
+library(ggpubr)
+```
+
+# Fig 2e
+
+```{r}
+# cluster dist
+d=read.csv('data/Fig2a_order.csv')
+# get order
+grnas=c(read.csv('data/Fig2a_order.csv')$gene,'ctrl')
+
+e %>% 
+  mutate(var = factor(gRNA, levels= grnas)) %>% 
+  ggplot( aes(x=var, y=n, fill=cluster) )+ 
+  geom_bar(stat='identity', position="fill") +
+  coord_flip()
+
+ggsave('output/Fig2e_p60_grna_dist_ordered_2a.pdf', height = 30)
+```
+
+
+# Fig 2g dot plot of TNF alpha modules from different clusters
+
+```{r}
+library(ggplot2)
+mod_lfc_avg = read.csv('data/p60_wgcna_avg_module_lfc1.csv')
+
+# adjust p-value
+mod_lfc_avg$padj1 = p.adjust(mod_lfc_avg$pval, method='BH')
+
+# log p-value
+mod_lfc_avg$lpadj1 = -log10(mod_lfc_avg$padj1)
+mod_lfc_avg$lpadj1[mod_lfc_avg$lpadj1 >50] = 50
+
+# remove non significant pval
+mod_lfc_avg1 = subset(mod_lfc_avg, padj1<0.05)
+
+# reorder
+grnas=read.csv('data/Fig2a_order.csv')$gene
+ov=intersect(grnas, unique(mod_lfc_avg1$ko))
+grnas=grnas[grnas %in% ov]
+mod_lfc_avg2=subset(mod_lfc_avg1, ko %in% ov )
+
+mod_lfc_avg2 %>% 
+  mutate(var = factor(ko, levels= grnas)) %>% 
+  ggplot( aes(var, module, color=lfc, size= lpadj1 ) ) +
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_color_gradient2(low='blue', mid='white', high='red') 
+
+ggsave('output/Fig2g.pdf', width = 20, height=4)
+
+
+```
+
+# Fig 2h
+
+```{r}
+library(RColorBrewer)
+library(ComplexHeatmap)
+
+# number of clusters to make
+num=4
+
+# read avg expression of module genes
+av=read.csv('data/p60_basal_avg_expr_clones.csv',row.names = 1)
+av$clones=NULL # remove cell numbers
+av=data.frame(t(av))
+
+av$Trp63=NULL # remove p63 outlier
+av$ctrl=NULL  # remove control
+
+av= log2(av+1)       # log2 transform
+av = t(scale(t(av))) # row scaling
+
+#color= rev(brewer.pal(n=11, name = "RdYlBu")),
+pheatmap::pheatmap( av, color = colorRampPalette(rev(brewer.pal(n = 11, name =
+  "RdYlBu")))(30),
+                    #scale = 'row', 
+                    filename = paste0('output/2h_clusters',num,'.pdf'), 
+                    cutree_cols = num,
+                    clustering_method = 'ward.D2',
+                    height = 5, width = 20,)
+```
+
+
+# Fig 2i
+
+```{r}
+col_fun = circlize::colorRamp2(seq(-4,4, length.out = 11), rev(brewer.pal(n=11, name = "RdYlBu")))
+
+ht_opt$heatmap_row_names_gp    = gpar(fontsize = 8)
+ht_opt$heatmap_column_names_gp = gpar(fontsize = 8)
+
+p=Heatmap(av , col=col_fun, rect_gp = gpar(col='grey70'),border = T,
+                    column_split = num,
+                    clustering_method_rows = 'ward.D2',
+                    clustering_method_columns = 'ward.D2',) 
+draw(p)
+
+# get cluster information
+cl=column_order(p)
+df=data.frame()
+
+n=0
+for (i in cl) { 
+  n=n+1
+  d=data.frame(i)
+  d$cluster=n
+  df=rbind(d,df)
+  }
+
+d=data.frame(ko=colnames(av))
+d$i=1:ncol(av)
+
+df=df %>% left_join(d)
+
+# combine avg expression of 25 module genes in 149ko without Trp63 with cell numbers
+av=read.csv('data/p60_basal_avg_expr_clones.csv')
+av=av[c('X','clones')]
+colnames(av)=c('ko','clones')
+
+av= av %>% left_join(df)
+av=na.omit(av) # remove Trp63
+av$cluster=paste0('cl',av$cluster)
+
+comp = list( c("cl1", "cl2"),c("cl1", "cl3"),c("cl1", "cl4"), c("cl2", "cl3"), c("cl2", "cl4"), c("cl3", "cl4") )
+
+av %>% 
+  mutate(clusters=factor(cluster, levels = c('cl1','cl2','cl3','cl4'))) %>%
+  ggboxplot(x='clusters', y='clones', fill='cluster', ylab='log2(cell number)') +
+  stat_compare_means(comparisons = comp, method = 'wilcox.test')
+
+ggsave(paste0('output/2h_cluster',num,'_boxplot.pdf'), width = 4, height = 8)
+
+```
+
+# Fig 2j
+
+```{r}
+# read avg expression of module genes
+av=read.csv('data/p60_basal_avg_expr_clones.csv',row.names = 1)
+
+pdf('output/2j.pdf')
+
+for (g in c('Rhob','Ier2')){
+    corr= paste0( 'spearman corr: ', round( cor(av[c('clones',g)],  method = 'spearman')[1,2], 3))
+    
+    print( ggplot(av, aes_string('clones', g)) + geom_point() +theme_bw() + ggtitle(corr) )
+}
+
+dev.off()
+```
+
+# Fig 2l
+
+```{r}
+av=read.csv('data/p60_basal_avg_expr_clones.csv', row.names = 1)
+lm = lm(clones ~ ., av)
+summary(lm)
+
+clones=av['clones']
+av$clones=NULL
+
+df = cbind( lm_pred=predict(lm, av ), clones)
+
+title = paste('Pearson R: ', round(cor(df$clones,df$lm_pred),3))
+
+ggplot(df, aes(clones, lm_pred)) + 
+  geom_point() + ggtitle( title  ) +
+  theme_bw()+ 
+  xlim(0,15)+
+  ylim(0,15) + 
+  geom_abline()+ 
+  xlab('log2 (Cell Number)') + 
+  ylab(' Weighted EpSC Module Expression')
+
+ggsave('output/Fig2l.pdf')
+```
+
+# Fig 2m
+
+```{r}
+library(data.table)
+# select up pathways
+up=c('TNF-alpha Signaling via NF-kB','Hypoxia', 'p53 Pathway', 'Interferon Gamma Response', 'IL-2/STAT5 Signaling' )
+
+# select down pathways
+dn=c('Epithelial Mesenchymal Transition', 'Angiogenesis', 'Notch Signaling','IL-2/STAT5 Signaling',  'Apoptosis' )
+
+# coloumn order
+cols=c('up5_vs_middle5', 'up5_vs_down5', 'up10_vs_middle10', 'up10_vs_bottom10', 'up20_vs_middle20', 'up20_vs_bottom20',  'up5_vs_ctrl' ,'Notch1_vs_ctrl' )
+
+# downregulated
+d=read.csv('data/p60_top_vs_bottom_down_hallmark_enrichr.csv')
+d=subset(d, Term %in% dn)
+d$sam=str_sub(d$sample,16,-32)
+
+# unflatten 
+df=dcast(d, Term ~ sam, value.var = "Combined.Score") %>% column_to_rownames('Term')
+df=df[dn,cols]
+
+pheatmap::pheatmap(df, 
+                   cluster_rows = F,
+                   clustering_method = 'ward.D2', 
+                   cluster_cols = F, 
+                   scale = 'column', 
+                   filename = 'output/2m_mast_dn_enrichr_heatmap.pdf', 
+                   height = 5, width = 10)
+
+# upregulated
+d=read.csv('data/p60_top_vs_bottom_up_hallmark_enrichr.csv')
+
+d=subset(d, Term %in% up)
+d$sam=str_sub(d$sample,16,-32)
+
+# unflatten 
+df=dcast(d, Term ~ sam, value.var = "Combined.Score") %>% column_to_rownames('Term')
+df=df[up,cols]
+
+pheatmap::pheatmap(df, 
+                   cluster_rows = F,
+                   clustering_method = 'ward.D2', 
+                   cluster_cols = F, 
+                   scale = 'column', 
+                   filename = 'output/2m_mast_up_enrichr_heatmap.pdf', 
+                   height = 5, width = 10)
+
+
+```
+
+
+# Fig 3a cellchat
+
+```{r}
+library(CellChat)
+
+p60_grna= LoadH5Seurat('out/wta11to18_filtered_seurat_merge_nodoublet_grna_183K_2k_10pc_10res_grna_processed.h5seurat')
+Idents(p60_grna)='RNA_snn_res.0.1'
+
+ids=unlist(strsplit('c0 c1 c2 c3 c4 c5 c6 c7 c8',' '))
+names(ids) <- levels(p60_grna)
+
+p60_grna <- RenameIdents(p60_grna, ids)
+
+cell <- createCellChat(p60_grna, group.by = "ident", assay = "RNA")
+
+CellChatDB <- subsetDB(CellChatDB.mouse, search = "Secreted Signaling")
+
+#showDatabaseCategory(CellChatDB)
+cell@DB <- CellChatDB
+
+# subset the expression data of signaling genes for saving computation cost
+cell <- subsetData(cell) # This step is necessary even if using the whole database
+cell <- identifyOverExpressedGenes(cell)
+cell <- identifyOverExpressedInteractions(cell)
+
+cell <- computeCommunProb(cell, type='truncatedMean', trim = 0.05)
+# Filter out the cell-cell communication if there are only few number of cells in certain cell groups
+cell <- filterCommunication(cell, min.cells = 10)
+
+# 
+df <- subsetCommunication(cell)
+
+cell <- computeCommunProbPathway(cell)
+
+cell <- aggregateNet(cell)
+
+df_net <- subsetCommunication(cell)
+
+# df pathway
+df_pathway <- subsetCommunication(cell, slot.name = "netP")
+write.csv(df_pathway, 'output/cellchat_p60.csv')
+
+# plot TNF
+pathways.show <- c("TNF") 
+# Hierarchy plot
+vertex.receiver = seq(1,4) # a numeric vector. 
+
+pdf('output/cellchat_p60_Tnf.pdf')
+print( netVisual_aggregate(cell, signaling = pathways.show,  vertex.receiver = vertex.receiver) )
+
+dev.off()
+```
+
+
+# Fig 3d
+
+```{r}
+# run MAGECK in shell
+# mageck test -k data/tnf_p60_reads_gene_ctrl.tsv -c PFR_4A,PFR_4B,PFR_4C,PFR_4D -t WTA11,WTA12,WTA13,WTA14,WTA15,WTA16,WTA17,WTA18 -n p60_vs_tnf_ctrl_norm --pdf-report --normcounts-to-file --norm-method control --control-sgrna control_sgrnas 
+
+# read MAGECK output
+a=read.table('data/p60_vs_tnf_ctrl_norm.tsv',header = T)
+# remove control
+a=subset(a, Gene != 'ctrl')
+
+a$lfc=-a$LFC
+
+a %>%
+  mutate(gene = as.numeric(fct_reorder(Gene, desc(treat_mean))) ) %>%
+  ggplot(aes(gene, lfc, fill=-log10(FDR))) + geom_bar(stat='identity') + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  geom_smooth()
+
+ggsave('output/p60_vs_tnf_ctrl_norm.pdf', width = 17, height = 5)
+```
+
+
+# Fig 3g
+```{r}
+library(DESeq2)
+c= read.table('data/immune_dep_count.tsv', row.names = 1, header = T)
+
+# design
+d=read.csv('data/immune_dep_design.csv', row.names = 1)
+c=c[,rownames(d)]
+
+# run DEseq pipeline
+dds=DESeqDataSetFromMatrix(countData = c, colData = d, design= ~con)
+
+# nromalize with 50 controls
+dds=estimateSizeFactors(dds, controlGenes=1:50 )
+dds=estimateDispersions(dds)
+dds=nbinomWaldTest(dds)
+
+# CD115 vs IgG
+res=results(dds, contrast = c('con','CD115','IgG'), cooksCutoff=F, independentFiltering = F)
+res=data.frame(res)[c(51:200),]
+write.csv(res,'output/CD115_vs_IgG_de_ctrl_norm_wald.csv')
+
+# CD48 vs IgG
+res=results(dds, contrast = c('con','CD48','IgG'), cooksCutoff=F, independentFiltering = F)
+res=data.frame(res)[c(51:200),]
+write.csv(res,'output/CD48_vs_IgG_de_ctrl_norm_wald.csv')
+
+# normalized counts
+counts = data.frame(counts(dds,normalized=TRUE))
+write.csv(counts,'output/immune_dep_counts_deseq_ctrl_norm.csv')
+
+```
+
+
+# Fig 3h
+```{r}
+a=read.csv('data/immune_dep_counts_deseq_ctrl_norm.csv', row.names = 1)[c(51:200),]
+
+IgG  =apply( a[grep('IgG',colnames(a))]  , 1, median )
+CD115=apply( a[grep('CD115',colnames(a))], 1, median )
+CD48 =apply( a[grep('CD48',colnames(a))] , 1, median )
+
+df=data.frame(IgG,CD115,CD48)
+#write.csv(df,'output/immune_dep_median_deseq_counts.csv')
+
+# select top 20
+top=names(sort( IgG, decreasing = T ))[1:20]
+
+df=df[top,]
+
+#wilcox.test(df$CD115, df$IgG, paired = T)
+
+df=reshape2::melt(rownames_to_column(df))
+df$val=log2(df$value)
+
+# comparisons
+comp=list(c('CD48','IgG'), c('CD115','IgG') )
+
+ggplot(df, aes(variable, log2(value), fill=variable )) +
+  geom_boxplot() +  
+  stat_compare_means(comparisons=comp, paired = T)  + theme_bw()
+
+ggsave('output/immune_dep_top20_median_boxplot.pdf',height = 8, width = 5)
+
+```
