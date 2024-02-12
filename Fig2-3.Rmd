@@ -356,6 +356,54 @@ counts = data.frame(counts(dds,normalized=TRUE))
 write.csv(counts,'output/immune_dep_counts_deseq_ctrl_norm.csv')
 
 ```
+# Fig 3g
+```{r}
+df<- read.csv('data/CD115_vs_IgG_de_ctrl_norm_wald.csv')
+
+# order according to DESEQ normalized counts MEDIAN
+custom_order <- c(
+  "Notch1", "Fat1", "Trp53", "Notch2", "Ahnak", "D630045J12Rik", "Zfp831", "Col6a3", "Obscn", "Erbb4",
+  "Cubn", "Lrp2", "Myh1", "Rp1", "Pappa2", "Pkhd1", "Nav3", "Muc3", "Tet1", "Cfh",
+  "Epha5", "Dnah5", "Dnah11", "Shank2", "Fam135b", "Csmd2", "Muc5b", "Ank2", "Ryr2", "Unc13c",
+  "Kmt2c", "Cacna1e", "Pcdh15", "Ptprd", "Cdh10", "Ano1", "Col6a6", "Zfp78", "Fmn2", "Reln",
+  "Tenm1", "Lama5", "Xirp2", "Sphkap", "Zmat3", "Lrp1", "Adgrv1", "Fat2", "Prex2", "Vcan",
+  "Dscam", "Magi2", "Spta1", "Dnah3", "Csmd1", "Abca13", "Cttn", "Fgf3", "Cdh2", "Col11a1",
+  "Sis", "Pclo", "Tnni3k", "Pcdh11x", "Akap9", "Scn9a", "Spag17", "Hras", "Col22a1", "Tnxb",
+  "Zfhx4", "Neb", "Dnah6", "Macf1", "Slit2", "Herc2", "Lama2", "Muc2", "Fat4", "Runx1t1",
+  "Dnah9", "Syne2", "Muc4", "Dmd", "Kmt2d", "Dnah17", "Ryr3", "Col4a4", "Thsd7a", "Peg3",
+  "Ryr1", "Dgkb", "Lrp1b", "Ros1", "Aff3", "Col6a5", "Adgrl3", "Adgrb3", "Tpcn2", "Prkdc",
+  "Ahnak2", "Fat3", "Csmd3", "Erich3", "Sox2", "Fgf4", "Col1a2", "Zfp469", "Muc16", "Pkhd1l1",
+  "Flg", "Pik3cg", "Myh2", "Fgf15", "Dnah10", "Vps13b", "Casp8", "Mroh2b", "Zfp804b", "Adgrl2",
+  "Myh8", "Epha7", "Mgam", "Kdr", "Apob", "Aspm", "Pak7", "P3h2", "Hmcn1", "Dnah7a",
+  "Ttn", "Crebbp", "Ush2a", "Ep300", "Ccnd1", "Cdkn2b", "Plec", "Syne1", "Dnah8", "Fbxw7",
+  "Pik3ca", "Ppfia1", "Cdkn2a", "Dst", "Fadd", "Oraov1", "Huwe1", "Nsd1", "Mdn1", "Trp63"
+)
+
+# Reordering the dataframe
+df_ordered <- df[match(custom_order, df$X), ]
+
+plot_data <- df %>%
+  mutate(Status = ifelse(log2FoldChange > 0, "Up", "Down"),
+         Gene = factor(X, levels = custom_order),
+         log2P = log2(padj),  # Calculate the log2 of the P.value
+         log2P = ifelse(log2P == -Inf, min(log2P[!is.infinite(log2P)]), log2P))  # Handle -Inf values
+
+# Convert the factor to a numeric scale
+plot_data$GeneNum <- as.numeric(plot_data$Gene)
+# Creating the waterfall plot with the custom gene order
+ggplot(plot_data, aes(x = GeneNum, y = log2FoldChange, fill = log2P)) +
+  geom_col(aes(group = Gene), show.legend = FALSE) +
+  geom_smooth(method = "loess", se = TRUE, color = "red", size = 1) +
+  scale_fill_gradient(low = "lightsteelblue1", high = "midnightblue",
+                      limits = c(min(plot_data$log2P), 0),
+                      oob = scales::oob_squish) +
+  labs(title = "Waterfall Plot of log2 CD115 vs IgG with Custom Gene Order", x = "Gene", y = "log2 Fold Change") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  scale_x_continuous(breaks = plot_data$GeneNum, labels = plot_data$Gene)
+
+```
+
 
 
 # Fig 3h
