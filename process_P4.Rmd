@@ -1,0 +1,202 @@
+---
+title: 'Mege and Process P4 samples'
+author: "Dr. Umesh Ghoshdastider"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+code_folding: hide
+---
+
+```{r}
+library(dplyr)
+library(Seurat)
+library(stringr)
+library(tibble)
+library(tidyr)
+library(SeuratDisk)
+library(data.table)
+library(ggplot2)
+
+```
+
+# function to read rhapsody file 
+```{r}
+read_rhapsody= function(f){
+  # fast read
+  dt=fread(f,skip=6,sep='\t')
+  # select columns
+  dt=dt[,c(1,2,5)]
+  
+  # remove cells <200 genes
+  cells = dt %>% count(Cell_Index) %>% filter(n>200)
+  dt=dt[Cell_Index %in% cells$Cell_Index,]
+  
+  # remove genes >n cells
+  genes = dt %>% count(Gene) %>% filter(n > 4)
+  # remove sgRNA grep('gRNA',genes$Gene,invert=TRUE)
+  genes = genes[!Gene %like% '_sgRNA']
+  dt=dt[Gene %in% genes$Gene,]
+  
+  # remove cells <200 genes again
+  cells = dt %>% count(Cell_Index) %>% filter(n>200)
+  dt=dt[Cell_Index %in% cells$Cell_Index,]
+  
+  # spread data
+  dt=dcast(dt, Gene ~ Cell_Index, value.var='RSEC_Adjusted_Molecules', fill=0)
+  dt= dt %>% column_to_rownames('Gene')
+  dt= CreateSeuratObject(counts=dt) #, min.features = 200
+  return(dt)
+}
+
+wta4 <- read_rhapsody('rhapsody/_1_run_210226_0593_WTA4_Expression_Data.st.gz')
+wta5 <- read_rhapsody('rhapsody/_1_run_210226_0593_WTA5_Expression_Data.st.gz')
+wta6 <- read_rhapsody('rhapsody/_1_run_210226_0593_WTA6_Expression_Data.st.gz')
+wta7 <- read_rhapsody('rhapsody/_1_PFR_WTA7_FKDL210048145-1a_HVV3VDSXY_Expression_Data.st.gz')
+wta8 <- read_rhapsody('rhapsody/_2_WTA7_all_0064_Undetermined_Expression_Data.st.gz')
+wta9 <- read_rhapsody('rhapsody/BD_WTA9_Expression_Data.st.gz')
+wta10 <- read_rhapsody('rhapsody/BD_WTA10_Expression_Data.st.gz')
+
+```
+
+# merge samples
+```{r}
+# tag samples
+wta4$sample='wta4'
+wta5$sample='wta5'
+wta6$sample='wta6'
+wta7$sample='wta7'
+wta8$sample='wta8'
+wta9$sample='wta9'
+wta10$sample='wta10'
+
+# merge
+sam = merge(wta4, y = c(wta5,wta6,wta7,wta8,wta9,wta10) )
+
+SaveH5Seurat(sam, 'out/wta4to10_filtered_seurat_merge_raw.h5seurat',  overwrite = TRUE )
+#Convert('out/wta4to10_filtered_seurat_merge_raw.h5seurat', dest = "h5ad", overwrite = TRUE)
+
+
+```
+
+# read merged data
+```{r}
+sam= LoadH5Seurat('out/wta4to10_filtered_seurat_merge_raw.h5seurat')
+
+# add annotation
+an <- read.csv('out/wta4to10_filtered_seurat_merge_raw_scrublet_pc40_grna_anno_q99_nodoublet.csv')
+
+anno <- sam@meta.data %>% rownames_to_column('X') %>% left_join(an) %>% column_to_rownames('X')
+
+sam@meta.data <- anno
+
+# filter cells without doublet and with gRNA, 
+sam <- subset(sam, q99>0)
+
+```
+
+# QC 
+```{r}
+sam[["percent.mito"]] <- PercentageFeatureSet(sam, pattern = "^mt-",assay='RNA')
+# Visualize QC metrics as a violin plot
+Idents(sam)='sample'
+VlnPlot(sam, features = c("nFeature_RNA", "nCount_RNA", "percent.mito"), ncol = 3, pt.size = 0)
+```
+
+# filtering cutoff
+```{r}
+quantile(sam$nCount_RNA,0.01)
+quantile(sam$nCount_RNA,0.99) 
+
+quantile(sam$nFeature_RNA,0.01)
+quantile(sam$nFeature_RNA,0.99) 
+
+quantile(sam$percent.mito,0.01)
+quantile(sam$percent.mito,0.95)
+quantile(sam$percent.mito,0.99) 
+```
+
+```{r}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+plot1 <- FeatureScatter(sam, feature1 = "nCount_RNA", feature2 = "percent.mito")
+plot2 <- FeatureScatter(sam, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+# filter low quality cells
+```{r}
+sam <- subset(sam, subset = nCount_RNA >500 & nCount_RNA< quantile(sam$nCount_RNA,0.99) & percent.mito < 20)
+
+# Visualize QC metrics as a violin plot
+VlnPlot(sam, features = c("nFeature_RNA", "nCount_RNA", "percent.mito"), ncol = 3, pt.size = 0)
+```
+
+# process data
+```{r}
+# processing
+sam=NormalizeData(sam) 
+sam=FindVariableFeatures(sam)
+sam=ScaleData(sam)
+
+sam=RunPCA(sam)
+ElbowPlot(sam,50)
+```
+
+```{r}
+sam=FindNeighbors(sam, dims = 1:20)
+sam=FindClusters(sam, resolution =0.1)
+#sam=RunTSNE(sam, dims = 1:10)
+sam=RunUMAP(sam, dims = 1:20)
+
+Idents(sam)='seurat_clusters'
+DimPlot(sam, reduction = "umap", label=TRUE)
+
+ggsave('pdf/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_grna_umap.pdf,',width = 10)
+SaveH5Seurat(sam, 'out/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_grna_processed.h5seurat',  overwrite = TRUE )
+```
+
+
+# cell cycle scoring
+```{r}
+sam=CellCycleScoring(sam, s.features = str_to_title(cc.genes$s.genes), g2m.features = str_to_title(cc.genes$g2m.genes) )
+
+Idents(sam)='Phase'
+DimPlot(sam, reduction = "umap")
+ggsave('pdf/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_umap_cell_cycle.pdf', width = 10)
+```
+
+# plot samples
+```{r}
+Idents(sam)='sample'
+DimPlot(sam, reduction = "umap")
+ggsave('pdf/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_umap_sample.pdf', width = 10)
+```
+
+
+# clustering
+```{r}
+library(future)
+plan("multiprocess", workers = 8)
+
+Idents(sam)='seurat_clusters'
+
+
+cluster_markers=FindAllMarkers(sam, only.pos = TRUE)
+
+plan("multiprocess", workers = 1)
+
+write.csv(cluster_markers,'csv/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_heatmap_markers.csv')
+
+top10 = cluster_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) 
+
+# plot heatmap
+DoHeatmap(subset(sam, downsample = 5000), features = top10$gene)
+ggsave('pdf/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_heatmap_top10.pdf',width =20, height = 20)
+
+
+```
+
+
