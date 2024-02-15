@@ -208,6 +208,7 @@ sam=CellCycleScoring(sam, s.features = str_to_title(cc.genes$s.genes), g2m.featu
 Idents(sam)='Phase'
 DimPlot(sam, reduction = "umap")
 ggsave('pdf/wta11to18_filtered_seurat_merge_nodoublet_183K_gRNA_2k_10pc_res10_umap_cell_cycle.pdf', width = 10)
+SaveH5Seurat(sam, 'out/wta11to18_filtered_seurat_merge_nodoublet_grna_183K_2k_10pc_10res_grna_processed.h5seurat',  overwrite = TRUE )
 ```
 
 # plot cluster gRNA dist
