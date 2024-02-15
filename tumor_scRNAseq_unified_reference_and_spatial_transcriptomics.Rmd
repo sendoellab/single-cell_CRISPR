@@ -9,18 +9,18 @@ output: html_document
 # import libraries
 
 ```{r}
-library(Seurat) #v4.9.9.9041 (i.e. v5 beta)
-library(SeuratDisk) #v0.0.0.9020
-library(spacexr) #v2.2.1
-library(dplyr) #v1.1.1
-library(tibble) #v3.2.1
-library(ggplot2) #v3.4.2
-library(MetBrewer) #v0.2.0
-library(patchwork) #v1.1.2
-#library(cowplot)
-library(ggpubr) #v0.6.0
+# versions used are noted in the trailing comments
+library(Seurat) # v4.9.9.9041 (i.e. v5 beta)
+library(SeuratDisk) # v0.0.0.9020
+library(spacexr) # v2.2.1
+library(dplyr) # v1.1.1
+library(tibble) # v3.2.1
+library(ggplot2) # v3.4.2
+library(MetBrewer) # v0.2.0
+library(patchwork)# v1.1.2
+library(ggpubr) # v0.6.0
 library(ISCHIA) # v1.0.0.0, currently requires installing before: "JEFworks-Lab/STdeconvolve", "jokergoo/ComplexHeatmap", limma (from BiocManager), "saeyslab/nichenetr"
-library(corrplot) #v0.92
+library(corrplot) # v0.92
 ```
 
 # Extended Data Figure 2e - scRNA-seq reference from mCherry-positive and mCherry-negative cells sorted from DMBA/TPA tumors
