@@ -9,18 +9,19 @@ output: html_document
 # import libraries
 
 ```{r}
-library(readr)
-library(Seurat)
-library(SeuratDisk)
-library(dplyr)
-library(stringr)
-library(writexl)
-library(tidyr)
-library(tibble)
-library(Hmisc)
-library(corrplot)
-library(ggplot2)
-library(cowplot)
+# versions used are noted in the trailing comments
+library(readr) # v2.1.4
+library(Seurat) # v4.9.9.9041 (i.e. v5 beta)
+library(SeuratDisk) # v0.0.0.9020
+library(dplyr) # v1.1.1
+library(stringr) # v1.5.0
+library(writexl) # v1.4.2
+library(tidyr) # v1.3.0
+library(tibble) # v3.2.1
+library(Hmisc) # v5.0-1
+library(corrplot) # v0.92
+library(ggplot2) # v3.4.2
+library(cowplot) # v1.1.1
 ```
 
 # Extented Data Table 1
@@ -36,7 +37,7 @@ CNV <- c("Cdkn2b", "Ppfia1", "Fadd", "Ano1", "Cttn", "Fgf3", "Shank2", "Fgf4", "
 
 # Alternatively, convert the 'data/sgRNA_20nt.fa' in this repository from FASTA to a two-column table:
 fa <- read_lines("data/sgRNA_20nt_repo.fa")
-guide_dict <- data.frame(guide_ID = fa[seq(1,by=2, len=500)] %>% stringr::str_remove(., pattern = "^>"),
+guide_dict <- data.frame(guide_ID = fa[seq(1, by=2, len=500)] %>% stringr::str_remove(., pattern = "^>"),
                          sgRNA = fa[seq(2,by=2, len=500)])
 
 # Import PCR counts for pre-injection libraries (T0):
@@ -69,7 +70,7 @@ df.p4 <- p4@meta.data %>% #dplyr::filter(RNA_snn_res.0.15 == 0) %>%
   dplyr::select(sgRNA, sample) %>% 
   table %>% as.data.frame %>%
   dplyr::mutate(sgRNA = as.character(sgRNA), 
-                sample= as.character(sample)) %>% 
+                sample = as.character(sample)) %>% 
   dplyr::rename(nCells = Freq, guide_ID = sgRNA)
 
 
@@ -78,7 +79,7 @@ df.p60 <- p60@meta.data %>% #dplyr::filter(RNA_snn_res.0.1 == 0) %>%
   dplyr::select(sgRNA, sample) %>% 
   table %>% as.data.frame %>%
   dplyr::mutate(sgRNA = as.character(sgRNA), 
-                sample= as.character(sample)) %>% 
+                sample = as.character(sample)) %>% 
   dplyr::rename(nCells = Freq, guide_ID = sgRNA)
 
 
@@ -94,18 +95,18 @@ df.p60 <- df.p60 %>% dplyr::mutate(lib = case_match(sample,
 ### Pre-injection libraries (T0)
 
 # Define 'gene_symbol' for control guides as 'ctrl', then add library label
-libA_guides <- full_join(guide_dict, libA_counts, by="sgRNA") %>% 
+libA_guides <- full_join(guide_dict, libA_counts, by = "sgRNA") %>% 
   mutate(gene_symbol = stringr::str_remove(guide_ID, pattern = "_sgRNA.*")) %>%
   # define column 'counts' for library A as the averaged counts of the 4 PCR replicates
   dplyr::mutate(counts = (S1+S2+S3+S4)/4) %>%
   dplyr::select(guide_ID, sgRNA, counts, gene_symbol) %>%
   dplyr::mutate(lib = "A") 
   
-libB_guides <- dplyr::full_join(guide_dict, libB_counts, by="sgRNA") %>% 
+libB_guides <- dplyr::full_join(guide_dict, libB_counts, by = "sgRNA") %>% 
   dplyr::mutate(gene_symbol = stringr::str_remove(guide_ID, pattern = "_sgRNA.*")) %>%
   dplyr::mutate(lib = "B") 
 
-libC_guides <- dplyr::full_join(guide_dict, libC_counts, by="sgRNA") %>% 
+libC_guides <- dplyr::full_join(guide_dict, libC_counts, by = "sgRNA") %>% 
   dplyr::mutate(gene_symbol = stringr::str_remove(guide_ID, pattern = "_sgRNA.*")) %>%
   dplyr::mutate(lib = "C")
 
@@ -138,7 +139,7 @@ libABC_counts$gene_symbol_tri[which(libABC_counts$guide_ID %in% ctrl_guideID_pse
 # Function to average by triplet (one value for each target gene), in each sample [steps 1-3 described above]:
 fold_change_by_sample <- function(Px_dataframe, T0_library_info){
   
-  df.px_FC.by_sample <- dplyr::left_join(Px_dataframe, T0_library_info, by=c("lib", "guide_ID")) %>%
+  df.px_FC.by_sample <- dplyr::left_join(Px_dataframe, T0_library_info, by = c("lib", "guide_ID")) %>%
   # Normalize each guide as fraction over the total nCells in each Px sample
   dplyr::group_by(sample) %>%
   dplyr::mutate(nCells_sample_tot = sum(nCells)) %>% dplyr::ungroup(.) %>%
@@ -150,7 +151,7 @@ fold_change_by_sample <- function(Px_dataframe, T0_library_info){
   dplyr::summarise(gene_symbol_tri.avg_FC = mean(sgRNA_FC)) %>%
   # add rank within each sample, from highest to lowest FC
   dplyr::group_by(sample) %>%
-  dplyr::mutate(rank_tie_min_by_sample =  dplyr::min_rank(- gene_symbol_tri.avg_FC)) %>%
+  dplyr::mutate(rank_tie_min_by_sample = dplyr::min_rank(- gene_symbol_tri.avg_FC)) %>%
   dplyr::ungroup(.) %>% # Note: guide_ID-level info is dropped
   # take log2
   dplyr::mutate(log2_gene_symbol_tri.avg_FC = log2(gene_symbol_tri.avg_FC)) %>%
@@ -260,16 +261,16 @@ mat.p60_ranks.by_sample <- df.p60_FC.by_sample %>% dplyr::select(sample, gene_sy
 # modified from Gordon Smyth's https://support.bioconductor.org/p/63198/#63204
 
 adjust_pval_matrix <- function(M){
-  sample.pair <- paste(colnames(M)[row(M)], colnames(M)[col(M)], sep=".")
+  sample.pair <- paste(colnames(M)[row(M)], colnames(M)[col(M)], sep = ".")
   i <- lower.tri(M)
-  Dat <- data.frame(sample_pair = sample.pair[i], p.value=M[i])
-  Dat$FDR <- p.adjust(Dat$p.value, method="BH")
+  Dat <- data.frame(sample_pair = sample.pair[i], p.value = M[i])
+  Dat$FDR <- p.adjust(Dat$p.value, method = "BH")
   # split pairs into 2 new columns, double to fill the missing pairs (reversed, with rename), and pivot_wider to matrix
-  Dat <- Dat %>% tidyr::separate(col = sample_pair, sep = "\\.", into=c("sample1", "sample2"))
+  Dat <- Dat %>% tidyr::separate(col = sample_pair, sep = "\\.", into = c("sample1", "sample2"))
   bimat <- rbind(
     Dat %>% select(sample1, sample2, FDR),
-    Dat %>% select(sample1, sample2, FDR) %>% dplyr::rename(sample2="sample1", sample1="sample2")
-  ) %>% tidyr::spread(., key = sample2, value = FDR) %>% column_to_rownames(var="sample1") %>% as.matrix
+    Dat %>% select(sample1, sample2, FDR) %>% dplyr::rename(sample2 = "sample1", sample1 = "sample2")
+  ) %>% tidyr::spread(., key = sample2, value = FDR) %>% column_to_rownames(var = "sample1") %>% as.matrix
   return(bimat)
 }
 
@@ -298,13 +299,13 @@ corr_p_on_ranks_p60_20tb.res <- corr_and_padj(mat.p60_ranks.by_sample[c(avg_top_
 corr_res <- corr_p_on_ranks_p60_20tb.res
 # FDR-adjusted p-values: substitute NAs (in diagonals) with 0s, to plot p-values without errors
 corr_res$FDR[which(is.na(corr_res$FDR))] <- 0
-corrplot::corrplot.mixed(corr_res$r, lower="number", upper="color", 
-                          lower.col= corrplot::COL2("BrBG", 100),
-                          upper.col= corrplot::COL2("BrBG", 100),
-                          #number.cex=0.9, tl.cex=0.7,
+corrplot::corrplot.mixed(corr_res$r, lower = "number", upper = "color", 
+                          lower.col = corrplot::COL2("BrBG", 100),
+                          upper.col = corrplot::COL2("BrBG", 100),
+                          #number.cex = 0.9, tl.cex = 0.7,
                           tl.srt = 45, tl.col = 'black',
                           p.mat = corr_res$FDR, sig.level = 0.05, 
-                          insig = 'pch', pch="X",
+                          insig = 'pch', pch = "X",
                           pch.cex = 0.9)
                           #insig = 'label_sig', pch.col = 'black')
   
@@ -314,7 +315,7 @@ ggp <- cowplot::ggdraw(p) +
         plot.subtitle = element_text(size = 12),
         plot.margin = grid::unit(c(0,0,0,0), "cm"))
   #, axis.line = element_line(colour = "black"),
-  # panel.border = element_rect(colour = "black", fill=NA, size=5))
+  # panel.border = element_rect(colour = "black", fill = NA, size = 5))
  
 # Save plot
 ggsave(
