@@ -1,0 +1,283 @@
+---
+title: "Code to reproduce Figure 4 l-n and Extended Data Figure 7"
+author: "Simona Baghai Sain"
+output: html_document
+  html_document:
+    toc: yes
+---
+
+# import libraries
+
+```{r}
+library(Seurat) #v4.9.9.9041 (i.e. v5 beta)
+library(SeuratDisk) #v0.0.0.9020
+library(spacexr) #v2.2.1
+library(dplyr) #v1.1.1
+library(tibble) #v3.2.1
+library(ggplot2) #v3.4.2
+library(MetBrewer) #v0.2.0
+library(patchwork) #v1.1.2
+#library(cowplot)
+library(ggpubr) #v0.6.0
+library(ISCHIA) # v1.0.0.0, currently requires installing before: "JEFworks-Lab/STdeconvolve", "jokergoo/ComplexHeatmap", limma (from BiocManager), "saeyslab/nichenetr"
+library(corrplot) #v0.92
+```
+
+# Extended Data Figure 2e - scRNA-seq reference from mCherry-positive and mCherry-negative cells sorted from DMBA/TPA tumors
+
+```{r}
+### Prepare the unified single-cell RNAseq reference from mCherry-positive and mCherry-negative tumor cells ###
+
+# Import Seurat objects saved in "process_tumor_mcherry_pos.Rmd" and "process_tumor_mcherry_neg.Rmd"
+mpos <- SeuratDisk::LoadH5Seurat("out/bumpy13_14_mcherry_pos_pc30_res20_processed.h5seurat")
+mneg <- SeuratDisk::LoadH5Seurat("out/bumpy13_14_mcherry_neg_pc30_res20_processed.h5seurat")
+
+mpos$orig.ident <- "mCherry_pos"
+mneg$orig.ident <- "mCherry_neg"
+
+# Save to new metadata columns the cluster identities assigned pre-merge:
+tmp <- paste0("pos_cluster_", mpos$RNA_snn_res.0.2)
+names(tmp) <- colnames(mpos)
+
+mpos <- AddMetaData(mpos,
+  metadata = tmp,
+  col.name = 'mpos_clusters'
+)
+
+tmp <- paste0("neg_cluster_", mneg$RNA_snn_res.0.2)
+names(tmp) <- colnames(mneg)
+
+mneg <- AddMetaData(mneg,
+                    metadata = tmp,
+                    col.name = 'mneg_clusters'
+)
+rm(tmp)
+
+# In mCherry positive dataset, subset cluster 7 (~TSKs, tumor-specific keratinocytes)  and re-cluster it further into two sub-clusters:
+sub7p <- subset(mpos, cells=colnames(mpos)[mpos$seurat_clusters==7]) %>% NormalizeData %>% 
+  FindVariableFeatures %>% ScaleData %>% RunPCA %>% FindNeighbors %>% 
+  FindClusters(resolution=0.2) %>% RunUMAP(dims = 1:30)
+# cluster 0 is the one expressing Mmp10 significantly higher:
+FindMarkers(sub7p, features = "Mmp10", ident.1 = 0, ident.2 = 1)
+# At the same time, the two subclusters do not show big differences in UMIs, genes, percent.mito nor doublet_score:
+#VlnPlot(sub7p, features=c("nCount_RNA", "nFeature_RNA", "percent.mito"), split.by = "RNA_snn_res.0.2", c("red", "blue"), pt.size = 0)
+
+# Merge the two Seurat objects into object 'mm' (merged mCherry)
+mm <- merge(mpos, y = mneg, add.cell.ids = c("mCherry_pos", "mCherry_neg"), project = "DMBA_TPA_tumors", merge.data = TRUE)
+mm <- mm %>% FindVariableFeatures %>% ScaleData %>% RunPCA(npcs = 50)
+# ElbowPlot(mm, ndims = 50) # keep all dims
+mm <- mm %>% FindNeighbors(dims = 1:50, reduction = "pca") %>% 
+  FindClusters(resolution = 0.3, cluster.name = "unintegrated_clusters") %>% 
+  RunUMAP(dims = 1:50, reduction = "pca", reduction.name = "umap.unintegrated")
+
+# compare clusters before and after - main cell types overlap nicely:
+#DimPlot(mm, group.by = "orig.ident", cols = c("navyblue", "red"))
+#DimPlot(mm, group.by = "seurat_clusters", label=T) + NoLegend()
+#DimPlot(mm, group.by = "unintegrated_clusters", label=T, split.by = "orig.ident") + NoLegend()
+
+# prepare new metadata column for merged object with final labels for cell types
+tmp <- mm@meta.data %>% dplyr::select(orig.ident, unintegrated_clusters) %>% 
+  dplyr::mutate( celltype = case_match(as.character(unintegrated_clusters),
+                                              "0" ~ "G2M",
+                                              "1" ~ "Differentiated",
+                                              "2" ~ "Basal",                                                                                                
+                                              "3" ~ "mixed_pos3_neg1",  # mixed cluster from mpos cluster #3 and mneg cluster #1, later relabelled 'mixed'
+                                              "4" ~ "T cells",                                                                                   
+                                              "5" ~ "Langherans cells",                                                                                    
+                                              "6" ~ "Macrophages",                                                                                                   
+                                              "7" ~ "HF",                                                                                         
+                                              "8" ~ "UHF",                                                                                                  
+                                              "9" ~ "T cells Mem", # later relabelled as 'Tumor-infiltrating T cells'                                                                            
+                                              "10" ~ "pos4",              # cluster #4 from mpos                                                                    
+                                              "11" ~ "TAMs",             # Tumor-associated macrophages
+                                              "12" ~ "Neutrophils",                                                                                           
+                                              "13" ~ "Monocytes",                                                                                            
+                                              "14" ~ "NK cells",                                                                                         
+                                              "15" ~ "Ec",          # Erythrocytes                                                                                       
+                                              "16" ~ "Melanocytes",                                                                                   
+                                              "17" ~ "FBL",         # Fibroblasts
+                                              "18" ~ "Endothelial", # endothelial cells
+                                              "19" ~ "Mast cells"
+                                              )
+                 ) %>% select(celltype) %>% unlist
+names(tmp) <- colnames(mm)
+# mpos cluster 7, whose markers correlate with Khavari lab's TSKs (tumor-specific keratinocytes),
+# at this clustering resolution are are merged into the Basal or Differentiated clusters:
+#table(mm$unintegrated_clusters, mm$mpos_clusters)
+# So we label them in the merged dataset based on the two clusters found
+# when re-clustering cluster 7 (TSKs) from the mCherry positive dataset.
+tmp[names(tmp) %in% paste0("mCherry_pos_", colnames(sub7p)[sub7p$RNA_snn_res.0.2 == 0]) ] <- "TSK Mmp10_pos"
+tmp[names(tmp) %in% paste0("mCherry_pos_", colnames(sub7p)[sub7p$RNA_snn_res.0.2 == 1]) ] <- "TSK Mmp10_neg"
+rm(sub7p)
+
+mm <- AddMetaData(mm,
+                    metadata = tmp,
+                    col.name = 'celltype'
+)
+rm(tmp)
+
+
+DimPlot(mm, group.by = "celltype", #raster = F,
+        #label=T, repel = T, label.box = T, label.color = "white",
+        cols = MetBrewer::met.brewer(palette_name ="Archambault", n=length(unique(mm$celltype)), type="continuous"), order=T) + 
+  NoAxes() + ggtitle("") + guides(color=guide_legend(ncol = 1, override.aes = list(size=4)))
+
+ggsave('output/EDFig7e.pdf', height = 6, width = 8)
+
+```
+
+# Extended Data Figure 7f - Module score for Khavari lab's full TSK signature and for EMT hallmark gene set
+
+```{r}
+# Import gene list of mouse homologs for Khavari lab's full list of TSK marker genes (from Table S3 of Ji et al., 2020: https://doi.org/10.1016/j.cell.2020.05.039).
+# Gene symbol conversion was made using the Jackson Laboratory complete List of Human and Mouse Homologs (https://www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt),
+# downloaded on 6th October 2023. Univocal 'DB.Class.Key' were used for the conversion from human to mouse, for a total of 95 symbols:
+khav.tsk_sig_genes_list.mmu <- readLines("data/khavari_lab.tsk_sig_genes_list.mmu.txt")
+
+mm <- AddModuleScore(mm, features = list(khav.tsk_sig_genes_list.mmu), name = "Khavari_TSK_full_signature")
+
+# Import mouse gene list for Epithelial to mesenchymal transition geneset,
+# obtained from the Molecular Signatures Database, Hallmark collection (version 2023.1, at
+# https://www.gsea-msigdb.org/gsea/msigdb/mouse/geneset/HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION.html)
+emt.hallmark.geneset <- readLines("data/msigdb.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION.2023.1.Mm.txt")
+
+mm <- AddModuleScore(mm, features = list(emt.hallmark.geneset), name = "EMT_Hallmark_geneset")
+
+p1 <- FeaturePlot(mm, features = "Khavari_TSK_full_signature1", order=T, raster = F) + NoAxes() +
+ggtitle("Khavari lab full TSK signature")
+
+p2 <- VlnPlot(mm, features = "Khavari_TSK_full_signature1", group.by = "celltype", pt.size = 0,
+        cols = MetBrewer::met.brewer(palette_name ="Archambault", n=length(unique(mm$celltype)), type="continuous")) +
+  ggtitle("Khavari lab full TSK signature") + NoLegend() + xlab("")
+
+p3 <- VlnPlot(mm, features = "EMT_Hallmark_geneset1", group.by = "celltype", pt.size = 0,
+        cols = MetBrewer::met.brewer(palette_name ="Archambault", n=length(unique(mm$celltype)), type="continuous")) +
+  ggtitle("EMT hallmark gene set") + NoLegend() + xlab("")
+
+pdf(file = 'output/EDFig7f.pdf', height = 6, width = 8)
+p1
+p2
+p3
+dev.off()
+```
+
+# Extended Data Figure 7a - Spatial transcriptomics - Gene and UMI counts per tumor section
+
+```{r}
+# Import four different 10X Visium capture areas used for a total of 7 tumor sections:
+# A1_mouse_tumor_skin_230331 contains 4 different tumor sections
+# A1_mouse_tumor_skin_231204, B1_mouse_tumor_skin_231204, C1_mouse_tumor_skin_231204 contain a single tumor section each
+
+tum4 <- Seurat::Load10X_Spatial(data.dir = "/path/to/spaceranger_results/A1_mouse_tumor_skin_230331/outs/", filename="filtered_feature_bc_matrix.h5")
+a1 <- Load10X_Spatial(data.dir = "/path/to/spaceranger_results/A1_mouse_tumor_skin_231204/outs", filename="filtered_feature_bc_matrix.h5")
+a1$orig.ident <- "T5"
+b1 <- Load10X_Spatial(data.dir = "/path/to/spaceranger_results/B1_mouse_tumor_skin_231204/outs", filename="filtered_feature_bc_matrix.h5")
+b1$orig.ident <- "T6"
+c1 <- Load10X_Spatial(data.dir = "/path/to/spaceranger_results/C1_mouse_tumor_skin_231204/outs", filename="filtered_feature_bc_matrix.h5")
+c1$orig.ident <- "T7"
+
+# merge T5, T6 and T7 seurat objects for easier, compact plotting
+mg_abc <- merge(a1, y=list(b1, c1))
+
+# Add metadata with tumor identity for each spot barcode in A1_mouse_tumor_skin_230331:
+barcode2tumorID <- read.csv("data/A1_mouse_tumor_skin_230331.bc2tumorIDs.csv.gz", header = T) %>% tibble::column_to_rownames(var="spot_barcode")
+# first make sure barcode order matches with the one in the Seurat object
+barcode2tumorID <- barcode2tumorID[colnames(tum4),]
+
+tum4 <- AddMetaData(object = tum4, metadata = barcode2tumorID)
+# 'qc_tumorID' roughly defines the spots to each tumor section for the following QC plot,
+# then is further refined for the co-occurrence analyses in 'tumorID' (few extra spots excluded)
+
+p1 <- SpatialPlot(tum4, group.by = "qc_tumorID") + NoLegend()
+p2 <- VlnPlot(tum4, features = c("nFeature_Spatial", "nCount_Spatial"), group.by = "qc_tumorID")
+p3 <- VlnPlot(mg_abc, features = c("nFeature_Spatial", "nCount_Spatial"), group.by = "orig.ident")
+
+p1 / p2 / p3
+ggsave('output/EDFig7a.pdf', height = 12, width = 8)
+rm(mg_abc)
+```
+
+# Figure 4l,m; Extended Data Figure 7b-d - Spatial transcriptomics - Visium spots cell-type deconvolution results
+
+```{r}
+#### Spot decomposition with RCTD #####
+# The deconvolution of each spot into probabilities of its cell-type composition is performed with
+# the RCTD method from the 'spacexr' package.
+# 1. Restructure the single-cell reference for RCTD from its Seurat object:
+sc_counts <- mm@assays$RNA@counts
+cell_types <- setNames( mm$celltype, colnames(mm))
+cell_types <- as.factor(cell_types)
+sc_umis <- mm@meta.data[,c("orig.ident","nCount_RNA")]
+sc_umis <- setNames(sc_umis[[2]], rownames(sc_umis))
+SCreference <- spacexr::Reference(sc_counts, cell_types, sc_umis)
+# Note: each cell type is sampled down to 10000 cells if it has more.
+
+# 2. Restructure each spatial dataset for RCTD from its Seurat object. Representative example with 'A1_mouse_tumor_skin_231204':
+VisiumData <- spacexr::read.VisiumSpatialRNA("/path/to/spaceranger_results/A1_mouse_tumor_skin_231204/outs")
+
+# 3. create the RCTD object and run the deconvolution:
+dres <- create.RCTD(VisiumData, SCreference, max_cores=12)
+# deconvolution results, "dres":
+dres <- run.RCTD(dres, doublet_mode = "full")
+# Note, we choose to run the deconvolution with 'doublet_mode = "full"' to fit any number of cell types on each visium spot,
+# to avoid stricter assumptions on how many cell types are per spot (for the co-occurrence analysis,
+# we will then consider confidently detected only cell types above a certain proportion 'theta').
+
+# Next, normalize the scores so that they sum to 1 in each spot, this way
+# each entry represents the estimated proportion of each cell type in each spot.
+predictions <- spacexr::normalize_weights(dres@results$weights) %>% as.data.frame
+
+# To plot RCTD results with Seurat,
+# add the prediction scores to the metadata of the Seurat object and plot them with SpatialPlot.
+# Subset the visium Seurat object to keep only deconvoluted spots (spots with <100 UMI counts are not deconvoluted):
+vis_sub <- subset(a1, cells=rownames(predictions)) %>% AddMetaData(., metadata = predictions)
+
+# Function to plot deconvolution results for given reference cell types, arranged in a grid without individual legends:
+plot_dres_grid <- function(object, celltype_names, pt.size.factor = 1.5){
+  splots<-list() # as in, spatial plots
+  for(i in 1:length(celltype_names)){
+    splots[[i]] <- Seurat::SpatialFeaturePlot(object, features = celltype_names[i], pt.size.factor = pt.size.factor) + NoLegend() + 
+    theme(plot.margin = unit(c(0,0,0,0), "lines")) +
+      ggtitle(celltype_names[i]) + scale_color_gradientn(colours = Seurat:::SpatialColors(n = 100), limits = c(0, 1)) # this should but actually does not fix limits to the 0-1 range in all plots
+  }
+  return(splots)
+}
+
+plot_list <- plot_dres_grid(object = vis_sub, celltype_names = levels(cell_types))
+ggpubr::ggarrange(plotlist = plot_list)
+
+### Use high-resolution H&E image as background ####
+# Note that the higher-resolution images ('*_hires_image.png') were used for the publication, hence the increased pt.size.factor
+
+# Function to substitute the low-resolution image with the high-res. one in the VisiumV1 part of the Seurat object:
+convert_to_hires_image <- function(seurat_object, visium_path, filter.matrix = TRUE){
+# to plot the Visium with higher resolution image, follow https://github.com/satijalab/seurat/discussions/4833
+# Note: As of Seurat v5 beta, 'Read10X_Image(image.dir = "path/to/spatial", image.name = "tissue_hires_image.png")' still reads in the low-res image.
+# so we import high-res from a temporary folder where high-res was renamed as low-res:
+  img_hires = Read10X_Image(image.dir = paste0(visium_path, "/spatial"), filter.matrix = filter.matrix) #, image.name = "tissue_hires_image.png")
+# the 'img_hires' object obtained is of class "VisiumV1"
+# Subset for the kept barcodes / match the order:
+  # table(rownames(img_hires@coordinates) == rownames(vis_sub@images$slice1@coordinates))
+  # table(rownames(img_hires@coordinates) %in% rownames(vis_sub@images$slice1@coordinates))
+  img_hires@coordinates <- img_hires@coordinates[rownames(seurat_object@images$slice1@coordinates),]
+# Use the hires scalefactor
+  img_hires@scale.factors$lowres = img_hires@scale.factors$hires
+# Set the assay and key to the same as the lowres, just in case.
+  img_hires@assay = seurat_object@images$slice1@assay
+  img_hires@key = seurat_object@images$slice1@key
+# Replace the default low-res 'VisiumV1' object with this new high-res one:
+  hires_seurat_object <- seurat_object
+  hires_seurat_object@images$slice1 = img_hires
+  return(hires_seurat_object)
+}
+
+vis_sub_hires <- convert_to_hires_image(vis_sub, "/path/to/spaceranger_results_of_matching_visium_sample/outs")
+plot_list_hires <- plot_dres_grid(object = vis_sub_hires, celltype_names = levels(cell_types), pt.size.factor = 6)
+ggpubr::ggarrange(plotlist = plot_list_hires)
+# To plot results only for some cell types:
+# plot_list_hires <- plot_dres_grid(vis_sub_hires, pt.size.factor = 6, celltype_names = as.list(c("Basal", "Differentiated", "Endothelial", "TSK Mmp10_pos", "TSK Mmp10_neg", "FBL")))
+# Spatial feature plots for deconvolution results in Figure 4l-m and in Extended Data Fig. 7b-c were thus obtained accordingly.
+```
+
+# Figure 4n; Extended Data Figure 7g-h - Spatial transcriptomics - Cell-type co-occurrence analysis
+
