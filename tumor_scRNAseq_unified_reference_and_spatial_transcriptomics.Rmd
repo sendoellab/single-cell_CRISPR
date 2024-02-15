@@ -229,16 +229,18 @@ predictions <- spacexr::normalize_weights(dres@results$weights) %>% as.data.fram
 
 # To plot RCTD results with Seurat,
 # add the prediction scores to the metadata of the Seurat object and plot them with SpatialPlot.
-# Subset the visium Seurat object to keep only deconvoluted spots (spots with <100 UMI counts are not deconvoluted):
+# Subset the Visium Seurat object to keep only deconvoluted spots (spots with <100 UMI counts are not deconvoluted by default):
+# Note, here the 'a1' object is used for the example with A1_mouse_tumor_skin_231204:
 vis_sub <- subset(a1, cells=rownames(predictions)) %>% AddMetaData(., metadata = predictions)
 
 # Function to plot deconvolution results for given reference cell types, arranged in a grid without individual legends:
 plot_dres_grid <- function(object, celltype_names, pt.size.factor = 1.5){
-  splots<-list() # as in, spatial plots
+  splots <- list() # as in, spatial plots
   for(i in 1:length(celltype_names)){
     splots[[i]] <- Seurat::SpatialFeaturePlot(object, features = celltype_names[i], pt.size.factor = pt.size.factor) + NoLegend() + 
     theme(plot.margin = unit(c(0,0,0,0), "lines")) +
-      ggtitle(celltype_names[i]) + scale_color_gradientn(colours = Seurat:::SpatialColors(n = 100), limits = c(0, 1)) # this should but actually does not fix limits to the 0-1 range in all plots
+      ggtitle(celltype_names[i]) + scale_color_gradientn(colours = Seurat:::SpatialColors(n = 100), 
+                                                         limits = c(0, 1)) # this should (but actually does not) fix limits to the 0-1 range in all plots
   }
   return(splots)
 }
@@ -248,7 +250,6 @@ ggpubr::ggarrange(plotlist = plot_list)
 
 ### Use high-resolution H&E image as background ####
 # Note that the higher-resolution images ('*_hires_image.png') were used for the publication, hence the increased pt.size.factor
-
 # Function to substitute the low-resolution image with the high-res. one in the VisiumV1 part of the Seurat object:
 convert_to_hires_image <- function(seurat_object, visium_path, filter.matrix = TRUE){
 # to plot the Visium with higher resolution image, follow https://github.com/satijalab/seurat/discussions/4833
@@ -281,3 +282,110 @@ ggpubr::ggarrange(plotlist = plot_list_hires)
 
 # Figure 4n; Extended Data Figure 7g-h - Spatial transcriptomics - Cell-type co-occurrence analysis
 
+```{r}
+# Cell-type co-occurrence analysis with ISCHIA,
+# using the normalized predictions from RCTD.
+
+# Note, RCTD by default excludes spots if they have <100 UMIs. Therefore,
+# for this part use a Seurat object with only the deconvoluted spots.
+
+# Double check matching order of barcodes:
+#table(colnames(vis_sub) == rownames(predictions))
+
+# Run the celltype co-occurrence analysis across the whole tumor section
+# barcodes (bc) of the spots of the region of interest (roi): all
+roi_spots_bc <- colnames(vis_sub)
+
+# function to run co-localization analysis on a subset of chosen spots (i.e. ROI, region of interest)
+roi_ischia_res <- function(seurat_object = vis_sub, roi_spots_bc = roi_spots_bc, p.theta = 0.1, predictions_df = predictions){
+  
+  cooc_plot_title = paste0("Co-occurrence of cell types (if >",p.theta*100,"% per spot)")
+  
+  plot.bc_highlight <- SpatialPlot(seurat_object, cells.highlight = roi_spots_bc) + ggtitle("Spots used for co-ccurrence analysis") + NoLegend()
+  
+  tmp <- seurat_object@meta.data %>% dplyr::mutate(my_CC = dplyr::case_match(rownames(.), 
+                                                                             roi_spots_bc ~ "ROI",
+                                                                         .default = "others")) %>% dplyr::select(orig.ident, my_CC)
+  
+  new_CC <- tmp$my_CC
+  names(new_CC) <- rownames(tmp)
+  tmp_vis <- AddMetaData(seurat_object, metadata = new_CC, col.name = "CompositionCluster_CC")
+  # naming the column 'CompositionCluster_CC' because 'ISCHIA::spatial.celltype.cooccurence' is coded to test only on
+  # that column - alternatively rewrite the function parametrizing which metadata column it should pick.
+  
+  cooc_roi <- ISCHIA::spatial.celltype.cooccurence(spatial.object = tmp_vis,
+                                                   deconv.prob.mat = predictions_df,
+                                                   COI = "ROI",
+                                                   prob.th = p.theta,
+                                                   Condition = unique(tmp_vis$orig.ident)) # (!) here we want just 1 condition
+  # Co-occurrence results:
+  plot_ischia_res <- ISCHIA::plot.celltype.cooccurence(cooc_roi) +  theme(text = element_text(size = 0.5)) + 
+    ggtitle(cooc_plot_title) + theme(plot.title = element_text(size = 15))
+  
+  nspots_per_ct <- predictions_df[roi_spots_bc,] %>% apply(., 2, function(x) sum(x > p.theta)) %>% as.data.frame %>% setNames(., "nSpots_presence")
+  
+ return( list(cooc_res = cooc_roi,
+              plot.bc_highlight = plot.bc_highlight,
+              plot_ischia_res = plot_ischia_res,
+              spots_per_celltype = nspots_per_ct
+              )
+         )
+}
+
+# Save co-occurrence results across all spots, considering cell types present when having probability of at least 10% (i.e. 0.1/1):
+ischia_res <- roi_ischia_res(seurat_object = vis_sub,
+                                 roi_spots_bc = colnames(vis_sub),
+                                 p.theta = 0.1,
+                                 predictions_df = predictions)
+
+## Note: for A1_mouse_tumor_skin_230331, co-occurrence was tested in each tumor separately,
+# using as "ROI" the refined barcode list as defined in the "tumorID" metadata column. E.g., for T1:
+ischia_res.T1 <- roi_ischia_res(seurat_object = vis_sub,
+                                    roi_spots_bc = colnames(vis_sub)[vis_sub$tumorID == "T1"],
+                                    p.theta = 0.1,
+                                    predictions_df = predictions)
+
+#### Alternative plots for co-occurrence results #####
+# Use the 'corrplot' package to plot positive and negative co-occurrence results in separate plots.
+# Divide them into positive (p_gt) and negative (p_lt) results,
+# and use color gradient proportional to their p_gt or p_lt.
+
+offset = 0.0001 # to avoid log10(0)
+ischia_alt.plot_pos.df <- ischia_res$cooc_res$results %>%
+  select(sp1_name, sp2_name, p_gt) %>% 
+  mutate(tmp_score = -log10(p_gt + offset))
+
+ischia_alt.plot_neg.df <- ischia_res$cooc_res$results %>%
+  select(sp1_name, sp2_name, p_lt) %>% 
+  mutate(tmp_score = -log10(p_lt + offset))
+
+bimat.pos <- rbind(
+  ischia_alt.plot_pos.df %>% select(sp1_name, sp2_name, tmp_score) %>% 
+  dplyr::rename(cell_type1 = sp1_name, cell_type2 = sp2_name),
+  ischia_alt.plot_pos.df %>% select(sp2_name, sp1_name, tmp_score) %>% 
+    dplyr::rename(cell_type1 = sp2_name, cell_type2 = sp1_name)
+) %>% tidyr::spread(., key = cell_type2, value = tmp_score) %>% column_to_rownames(var = "cell_type1") %>% as.matrix
+
+bimat.neg <- rbind(
+  ischia_alt.plot_neg.df %>% select(sp1_name, sp2_name, tmp_score) %>% 
+    dplyr::rename(cell_type1 = sp1_name, cell_type2 = sp2_name),
+  ischia_alt.plot_neg.df %>% select(sp2_name, sp1_name, tmp_score) %>% 
+    dplyr::rename(cell_type1 = sp2_name, cell_type2 = sp1_name)
+) %>% tidyr::spread(., key = cell_type2, value = tmp_score) %>% column_to_rownames(var = "cell_type1") %>% as.matrix
+
+## Positive results only (score from 0 to 1)
+corrplot::corrplot(bimat.pos, method = "color", is.corr = FALSE, col=colorRampPalette(c("grey", "white", "beige", "maroon"))(50), 
+                  # sig.level = 0.05, pch.cex = 1.2, p.mat = bimat.pos.p_gt,
+                   #insig = 'label_sig', pch.col = 'white',
+                   tl.srt = 45, tl.col = 'black', diag = FALSE, type = "upper", addgrid.col = "grey")
+
+## Negative results only (score from 0 to 1 as above)
+# used with 'tmp_score= p_lt'
+corrplot::corrplot(bimat.neg, method = "color", is.corr = FALSE, col = colorRampPalette(c("grey", "white", "beige", "#313695"))(50), 
+                   #sig.level = 0.05, pch.cex = 0.9, p.mat = bimat.neg.p_lt,
+                   #insig = 'label_sig', pch.col = 'white',
+                   tl.srt = 45, tl.col = 'black', diag = FALSE, type="upper", addgrid.col="grey")
+
+# Plots in Figure 4n and Extended Data Figure 7g were obtained with above code for T1 (see 'ischia_res.T1')
+# Plots in Extended Data Figure 7h were obtained with the above code for T5 (from results for 'A1_mouse_tumor_skin_231204')
+```
