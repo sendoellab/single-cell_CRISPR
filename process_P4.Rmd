@@ -147,7 +147,7 @@ ElbowPlot(sam,50)
 
 ```{r}
 sam=FindNeighbors(sam, dims = 1:20)
-sam=FindClusters(sam, resolution =0.1)
+sam=FindClusters(sam, resolution =0.15)
 #sam=RunTSNE(sam, dims = 1:10)
 sam=RunUMAP(sam, dims = 1:20)
 
@@ -155,7 +155,7 @@ Idents(sam)='seurat_clusters'
 DimPlot(sam, reduction = "umap", label=TRUE)
 
 ggsave('pdf/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_grna_umap.pdf,',width = 10)
-SaveH5Seurat(sam, 'out/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_grna_processed.h5seurat',  overwrite = TRUE )
+SaveH5Seurat(sam, 'out/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_15res_grna_processed.h5seurat',  overwrite = TRUE )
 ```
 
 
