@@ -18,6 +18,49 @@ library(tibble)
 library(ggpubr)
 ```
 
+# Fig 2a
+
+```{python}
+import pandas as pd
+import numpy as np
+
+# p60 samples
+p60='wta11,wta12,wta13,wta14,wta15,wta16,wta17,wta18'.split(',')
+
+a=pd.read_csv('data/t0_p60_cell_counts1.csv',index_col=0)
+
+# normalize to proportions
+b=a.set_index('Gene')
+b=b/b.sum()
+
+# p60 vs t0
+d=pd.DataFrame()
+# normalize p60 samples to each library
+# lib B
+d['wta11']=b.wta11/b.libb
+d['wta12']=b.wta12/b.libb
+
+# lib C
+d['wta13']=b.wta13/b.libc
+d['wta14']=b.wta14/b.libc
+d['wta15']=b.wta15/b.libc
+d['wta16']=b.wta16/b.libc
+d['wta17']=b.wta17/b.libc
+d['wta18']=b.wta18/b.libc
+
+d['gene']=d.index.tolist()
+# take average of 3 guides per gene
+d=d.groupby('gene').mean()
+
+# get cell number weights
+w=a[p60].sum()
+# get weighted average
+d=(d*w).sum(axis=1)/w.sum()
+# log2 enrichment
+d=np.log2(d) 
+d.sort_values(ascending=False).to_frame('lfc').to_csv('output/p60_vs_t0_wt_lfc.csv')
+```
+
 # Fig 2e
 
 ```{r}
