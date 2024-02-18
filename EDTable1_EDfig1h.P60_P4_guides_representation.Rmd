@@ -53,7 +53,7 @@ libC_counts <- read.csv("T0_library_C_counts.csv", h=T) #%>% setNames(., nm=c("s
 
 # Import Seurat objects for Px (P4 or P60) samples, as obtained from "process_P4.Rmd" and "process_P60.Rmd":
 # P4
-p4 <- SeuratDisk::LoadH5Seurat("out/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_10res_grna_processed.h5seurat")
+p4 <- SeuratDisk::LoadH5Seurat("out/wta4to10_filtered_seurat_merge_nodoublet_grna_120K_2k_20pc_15res_grna_processed.h5seurat")
 
 # P60
 p60 <- SeuratDisk::LoadH5Seurat("out/wta11to18_filtered_seurat_merge_nodoublet_grna_183K_2k_10pc_10res_grna_processed.h5seurat")
