@@ -1,5 +1,5 @@
 ---
-title: "Code to reproduce Figure 4 l-n and Extended Data Figure 7"
+title: "Code to reproduce Figure 4 i-k and Extended Data Figure 7"
 author: "Simona Baghai Sain"
 output: html_document
   html_document:
@@ -23,7 +23,7 @@ library(ISCHIA) # v1.0.0.0, currently requires installing before: "JEFworks-Lab/
 library(corrplot) # v0.92
 ```
 
-# Extended Data Figure 2e - scRNA-seq reference from mCherry-positive and mCherry-negative cells sorted from DMBA/TPA tumors
+# Extended Data Figure 7e - scRNA-seq reference from mCherry-positive and mCherry-negative cells sorted from DMBA/TPA tumors
 
 ```{r}
 ### Prepare the unified single-cell RNAseq reference from mCherry-positive and mCherry-negative tumor cells ###
@@ -197,7 +197,7 @@ ggsave('output/EDFig7a.pdf', height = 12, width = 8)
 rm(mg_abc)
 ```
 
-# Figure 4l,m; Extended Data Figure 7b-d - Spatial transcriptomics - Visium spots cell-type deconvolution results
+# Figure 4i,j; Extended Data Figure 7b-d - Spatial transcriptomics - Visium spots cell-type deconvolution results
 
 ```{r}
 #### Spot decomposition with RCTD #####
@@ -280,7 +280,7 @@ ggpubr::ggarrange(plotlist = plot_list_hires)
 # Spatial feature plots for deconvolution results in Figure 4l-m and in Extended Data Fig. 7b-c were thus obtained accordingly.
 ```
 
-# Figure 4n; Extended Data Figure 7g-h - Spatial transcriptomics - Cell-type co-occurrence analysis
+# Figure 4k; Extended Data Figure 7g-h - Spatial transcriptomics - Cell-type co-occurrence analysis
 
 ```{r}
 # Cell-type co-occurrence analysis with ISCHIA,
@@ -386,6 +386,6 @@ corrplot::corrplot(bimat.neg, method = "color", is.corr = FALSE, col = colorRamp
                    #insig = 'label_sig', pch.col = 'white',
                    tl.srt = 45, tl.col = 'black', diag = FALSE, type="upper", addgrid.col="grey")
 
-# Plots in Figure 4n and Extended Data Figure 7g were obtained with above code for T1 (see 'ischia_res.T1')
+# Plots in Figure 4k and Extended Data Figure 7g were obtained with above code for T1 (see 'ischia_res.T1')
 # Plots in Extended Data Figure 7h were obtained with the above code for T5 (from results for 'A1_mouse_tumor_skin_231204')
 ```
