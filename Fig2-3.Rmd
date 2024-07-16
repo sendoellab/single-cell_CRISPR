@@ -144,7 +144,7 @@ pheatmap::pheatmap( av, color = colorRampPalette(rev(brewer.pal(n = 11, name =
 ```
 
 
-# Fig 2i
+# Fig 2h
 
 ```{r}
 col_fun = circlize::colorRamp2(seq(-4,4, length.out = 11), rev(brewer.pal(n=11, name = "RdYlBu")))
