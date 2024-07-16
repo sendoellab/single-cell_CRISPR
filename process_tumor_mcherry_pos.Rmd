@@ -25,7 +25,7 @@ library(ggplot2)
 # function to read rhapsody file fast
 read_rhapsody= function(f){
   # fast read
-  dt=fread(f,skip=6,sep='\t')
+  dt=fread(f, sep='\t')
   # select columns
   dt=dt[,c(1,2,5)]
   
@@ -47,7 +47,7 @@ read_rhapsody= function(f){
 }
 
 # bumpy13_14 mcherry pos
-pos  <- read_rhapsody('/mnt/ngs/umesh/scrna-seq/peter/tumor/rhapsody/bumpy13_14_mcherry_pos_Expression_Data.st.gz')
+pos  <- read_rhapsody('rhapsody/mCherry_positive_tumor_BD_WTA_Expression_Data.st.gz')
 
 # save raw data to process by scrublet
 SaveH5Seurat(pos, 'out/bumpy13-14_mcherry_pos_raw.h5seurat',  overwrite = TRUE )
