@@ -26,7 +26,7 @@ library(ggplot2)
 ```{r}
 read_rhapsody= function(f){
   # fast read
-  dt=fread(f,skip=6,sep='\t')
+  dt=fread(f, sep='\t')
   # select columns
   dt=dt[,c(1,2,5)]
   
@@ -51,11 +51,11 @@ read_rhapsody= function(f){
   return(dt)
 }
 
-wta4 <- read_rhapsody('rhapsody/_1_run_210226_0593_WTA4_Expression_Data.st.gz')
-wta5 <- read_rhapsody('rhapsody/_1_run_210226_0593_WTA5_Expression_Data.st.gz')
-wta6 <- read_rhapsody('rhapsody/_1_run_210226_0593_WTA6_Expression_Data.st.gz')
-wta7 <- read_rhapsody('rhapsody/_1_PFR_WTA7_FKDL210048145-1a_HVV3VDSXY_Expression_Data.st.gz')
-wta8 <- read_rhapsody('rhapsody/_2_WTA7_all_0064_Undetermined_Expression_Data.st.gz')
+wta4 <- read_rhapsody('rhapsody/BD_WTA4_Expression_Data.st.gz')
+wta5 <- read_rhapsody('rhapsody/BD_WTA5_Expression_Data.st.gz')
+wta6 <- read_rhapsody('rhapsody/BD_WTA6_Expression_Data.st.gz')
+wta7 <- read_rhapsody('rhapsody/BD_WTA7_Expression_Data.st.gz')
+wta8 <- read_rhapsody('rhapsody/BD_WTA8_Expression_Data.st.gz')
 wta9 <- read_rhapsody('rhapsody/BD_WTA9_Expression_Data.st.gz')
 wta10 <- read_rhapsody('rhapsody/BD_WTA10_Expression_Data.st.gz')
 
