@@ -1,6 +1,6 @@
 # single-cell_CRISPR
 
-Accompanying code for the paper entitled: "In vivo single-cell CRISPR uncovers distinct TNF programmes in tumour evolution".
+Accompanying code for the paper entitled: "In vivo single-cell CRISPR uncovers distinct TNF programmes in tumour evolution" (https://www.nature.com/articles/s41586-024-07663-y).
 
 * Codes for reproducing Figure 1e,g and Extended Data Figure (EDF) 2d,e,f(right) are provided in [process_P60.Rmd](process_P60.Rmd)
 
